@@ -1,0 +1,24 @@
+# Xcode
+*.xcuserstate
+xcuserdata/
+DerivedData/
+build/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# API Keys
+**/APIKeys.swift
+
+# Audio recordings (user data, not app resources)
+*.m4a
+
+# macOS
+.DS_Store

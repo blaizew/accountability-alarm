@@ -1,0 +1,15 @@
+# Xcode
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+DerivedData/
+build/
+
+# API Keys
+APIKeys.swift
+
+# Audio recordings (user data)
+*.m4a
+
+# macOS
+.DS_Store
