@@ -89,7 +89,13 @@ final class AlarmEditViewModel {
         alarm.escalationLevel = escalationLevel
         alarm.enabled = true
 
-        NotificationService.shared.scheduleAlarm(alarm)
+        // Schedule with AlarmKit (rings through Silent/DnD/Focus at alarm volume).
+        Task { @MainActor in
+            let ids = await AlarmKitService.shared.scheduleAlarm(alarm)
+            alarm.alarmKitIdStrings = ids.map(\.uuidString)
+            let t1 = await AlarmKitService.shared.scheduleFirstCompanion(for: alarm)
+            alarm.nextT1IdString = t1?.uuidString
+        }
     }
 
     func toggleDay(_ day: Int) {

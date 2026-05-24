@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+    Critical Alerts entitlement.
+
+    Apple gates this. To actually use it:
+      1. Apply at https://developer.apple.com/contact/request/notifications-critical-alerts-entitlement
+         Explain the use case (accountability alarm — must ring through Silent/DnD/Focus).
+      2. Once approved, Apple enables the capability on your developer account.
+      3. Enable "Critical Alerts" capability on the target in Xcode → Signing & Capabilities.
+      4. NotificationService below will then succeed in registering critical sounds.
+
+    Until approval, this key has no effect — the OS silently ignores it.
+    -->
+    <key>com.apple.developer.usernotifications.critical-alerts</key>
+    <true/>
+</dict>
+</plist>

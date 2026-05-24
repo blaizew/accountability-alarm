@@ -10,6 +10,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         registerNotificationCategories()
+        // Wire the App Intent bridge so OpenConversationIntent can route into
+        // the conversation when "Talk to past-self" is tapped from an AlarmKit alert.
+        AlarmRoute.shared.appState = appState
+        // Start observing AlarmKit's current alarm set. Used by reconcile to
+        // detect orphaned alarms on every app open.
+        Task { @MainActor in
+            AlarmKitService.shared.startObserving()
+        }
         return true
     }
 
@@ -35,10 +43,24 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         UNUserNotificationCenter.current().setNotificationCategories([alarmCategory])
     }
 
+    /// Called when a notification arrives while the app is already foreground.
+    /// For our alarm notifications we don't want iOS's default banner — that's
+    /// subtle and auto-dismisses. We want to take over the screen with the
+    /// conversation view, same as when the user taps a notification from lock.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
+        let userInfo = notification.request.content.userInfo
+        if let alarmIdString = userInfo["alarmId"] as? String,
+           let alarmId = UUID(uuidString: alarmIdString),
+           let ringRaw = userInfo["ring"] as? Int,
+           let ring = EscalationRing(rawValue: ringRaw) {
+            await MainActor.run {
+                appState.triggerAlarm(alarmId: alarmId, ring: ring)
+            }
+            return []
+        }
         return [.banner, .sound, .badge]
     }
 
@@ -52,6 +74,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
               let ringRaw = userInfo["ring"] as? Int,
               let ring = EscalationRing(rawValue: ringRaw) else { return }
 
-        appState.triggerAlarm(alarmId: alarmId, ring: ring)
+        await MainActor.run {
+            appState.triggerAlarm(alarmId: alarmId, ring: ring)
+        }
     }
 }

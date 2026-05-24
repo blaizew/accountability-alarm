@@ -13,7 +13,10 @@ final class AudioSessionService {
 
     func configureForPlayback() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default, options: [.duckOthers])
+        // No options — default .playback interrupts other audio and routes to speaker.
+        // .duckOthers / .mixWithOthers would either share the channel or share with other apps,
+        // both wrong for an alarm that should take the floor.
+        try session.setCategory(.playback, mode: .default, options: [])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         try session.overrideOutputAudioPort(.speaker)
     }

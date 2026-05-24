@@ -6,5 +6,7 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Accountability Alarm uses alarms so it can wake you when you've committed to something — ringing through Silent and Focus modes. Each alarm carries your own recorded reason and an AI past-self that argues for that reason when the alarm fires.</string>
 </dict>
 </plist>

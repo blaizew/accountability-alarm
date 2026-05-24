@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Accountability Alarm — LEDGER prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter+Tight:wght@300;400;500;600;700&display=swap" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0a0a0c; overflow: hidden; }
+  body {
+    font-family: "Inter Tight", -apple-system, system-ui, sans-serif;
+    color: rgba(255,255,255,0.6);
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+    background:
+      radial-gradient(80% 50% at 50% 40%, oklch(0.18 0.02 270 / 0.6), transparent 70%),
+      #07070a;
+  }
+  @keyframes blink   { 50% { opacity: 0; } }
+  @keyframes lfadein { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+  @keyframes ltoast  { 0% { opacity: 0; transform: translate(-50%, 6px); } 12% { opacity: 1; transform: translate(-50%, 0); } 88% { opacity: 1; } 100% { opacity: 0; } }
+
+  #stage { position: relative; }
+</style>
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    <rect width="200" height="200" fill="#0a0a0c"/>
+    <g font-family="JetBrains Mono, monospace" fill="#e9e9ec">
+      <text x="38" y="92" font-size="56" font-weight="500">10</text>
+      <text x="38" y="92" font-size="56" font-weight="500" dx="58">:</text>
+      <text x="38" y="92" font-size="56" font-weight="500" dx="78">00</text>
+      <text x="38" y="118" font-size="11" letter-spacing="3" opacity="0.5">ACCT-ALARM / LEDGER</text>
+    </g>
+    <line x1="0" y1="140" x2="200" y2="140" stroke="oklch(0.72 0.13 55)" stroke-width="2"/>
+  </svg>
+</template>
+</head>
+<body>
+
+<div id="stage">
+  <div id="root"></div>
+</div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="ledger-shared.jsx"></script>
+<script type="text/babel" src="ledger-screens.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+const PHONE_W = 402, PHONE_H = 874;
+
+function useViewportScale() {
+  const [scale, setScale] = React.useState(1);
+  React.useEffect(() => {
+    const calc = () => {
+      const padX = 80, padY = 60;
+      const s = Math.min(1, (window.innerWidth - padX) / PHONE_W, (window.innerHeight - padY) / PHONE_H);
+      setScale(s);
+    };
+    calc();
+    window.addEventListener('resize', calc);
+    return () => window.removeEventListener('resize', calc);
+  }, []);
+  return scale;
+}
+
+function useClock() {
+  const [now, setNow] = React.useState(new Date());
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000 * 30);
+    return () => clearInterval(t);
+  }, []);
+  const hh = now.getHours();
+  const mm = String(now.getMinutes()).padStart(2,'0');
+  return `LOCAL ${String(hh).padStart(2,'0')}:${mm}`;
+}
+
+function App() {
+  const scale = useViewportScale();
+  const localTime = useClock();
+
+  // Persisted runtime state
+  const [alarms, setAlarms] = React.useState(DEMO_ALARMS);
+  const [history, setHistory] = React.useState(HISTORY_L);
+
+  // Navigation
+  const [tab, setTab] = React.useState("alarms");           // alarms | history (bottom tabs)
+  const [stack, setStack] = React.useState([{ screen: "list" }]); // simple stack
+  const [toast, setToast] = React.useState(null);
+
+  const top = stack[stack.length - 1];
+  const push = (frame) => setStack(s => [...s, frame]);
+  const pop = () => setStack(s => s.length > 1 ? s.slice(0, -1) : s);
+  const reset = () => setStack([{ screen: "list" }]);
+
+  // ── Handlers ──
+  const onTab = (id) => {
+    setTab(id);
+    setStack([{ screen: id === "history" ? "history" : "list" }]);
+  };
+
+  const onEdit = (alarmId) => push({ screen: "edit", alarmId });
+  const onNew = () => push({
+    screen: "edit", isNew: true,
+    alarmId: null,
+    draft: {
+      id: "new_" + Date.now(),
+      time: "10:00", period: "AM",
+      label: "New commitment",
+      daysLabel: "Mon – Fri", daysSet: [1,2,3,4,5],
+      escalation: "firm", on: true,
+      lastOutcome: "ignored", streak: 0,
+      reason: "",
+      reasonShort: "",
+      sleep: { enabled: false },
+    },
+  });
+
+  const onToggle = (alarmId) => {
+    setAlarms(as => as.map(a => a.id === alarmId ? { ...a, on: !a.on } : a));
+  };
+
+  const onSave = (draft) => {
+    setAlarms(as => {
+      const idx = as.findIndex(a => a.id === draft.id);
+      const next = { ...draft, reasonShort: draft.reasonShort || firstSentence(draft.reason) };
+      if (idx === -1) return [next, ...as];
+      const out = as.slice(); out[idx] = next; return out;
+    });
+    showToast("saved · changes committed", "good");
+    pop();
+  };
+
+  const onDelete = (alarmId) => {
+    setAlarms(as => as.filter(a => a.id !== alarmId));
+    showToast("deleted · commitment removed", "bad");
+    reset();
+  };
+
+  const onFire = (alarm) => push({ screen: "conv", alarmId: alarm.id });
+
+  const onResolve = ({ kind, alarmId, reason }) => {
+    const a = alarms.find(x => x.id === alarmId);
+    if (!a) { pop(); return; }
+    const now = new Date();
+    const dateStr = `${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][now.getDay()]} · ${now.getDate()} May`;
+    const time = `${a.time} ${a.period}`;
+    let outcome, snoozes = 0, ring = "nudge", overrideReason;
+    if (kind === "comply")    outcome = "complied";
+    else if (kind === "snooze") { outcome = "snoozed_then_complied"; snoozes = 1; ring = "math"; }
+    else if (kind === "override") { outcome = "overridden"; ring = "preview"; overrideReason = reason; }
+    else /* dismiss */          { outcome = "ignored"; }
+
+    const newEvent = {
+      id: "h_" + Date.now(), alarmId, date: dateStr, time, label: a.label,
+      outcome, snoozes, ring, overrideReason, durMin: kind === "comply" ? 12 : null,
+    };
+    setHistory(h => [newEvent, ...h]);
+    setAlarms(as => as.map(x => x.id === alarmId ? {
+      ...x,
+      lastOutcome: kind === "comply" ? "complied" : kind === "snooze" ? "snoozed" : kind === "override" ? "overridden" : "ignored",
+      streak: kind === "comply" ? (x.streak || 0) + 1 : kind === "snooze" ? x.streak : 0,
+    } : x));
+
+    showToast(
+      kind === "comply"   ? "logged · complied"      :
+      kind === "snooze"   ? "snoozed · 9 min"        :
+      kind === "override" ? "override · logged"      :
+                            "alarm dismissed",
+      kind === "comply" ? "good" : kind === "override" ? "bad" : "warn"
+    );
+    pop();
+  };
+
+  // ── Toast ──
+  const toastTimer = React.useRef();
+  const showToast = (text, kind) => {
+    clearTimeout(toastTimer.current);
+    setToast({ text, kind, key: Date.now() });
+    toastTimer.current = setTimeout(() => setToast(null), 2400);
+  };
+
+  // ── Compose current screen ──
+  let body;
+  if (top.screen === "list") {
+    body = <LList alarms={alarms} now={localTime}
+                  onFire={onFire} onEdit={onEdit} onToggle={onToggle} onNew={onNew}
+                  onTab={onTab} activeTab={tab}/>;
+  } else if (top.screen === "history") {
+    body = <LHistory events={history} onTab={onTab} activeTab={tab} />;
+  } else if (top.screen === "edit") {
+    const a = top.isNew ? top.draft : alarms.find(x => x.id === top.alarmId);
+    if (!a) { reset(); body = null; }
+    else body = <LEdit alarm={a} isNew={!!top.isNew}
+                       onSave={onSave} onCancel={pop} onDelete={() => onDelete(a.id)}/>;
+  } else if (top.screen === "conv") {
+    const a = alarms.find(x => x.id === top.alarmId);
+    if (!a) { reset(); body = null; }
+    else body = <LConv alarm={a} onResolve={onResolve}/>;
+  }
+
+  return (
+    <div style={{
+      width: PHONE_W, height: PHONE_H,
+      transform: `scale(${scale})`, transformOrigin: 'center center',
+      position: 'relative',
+    }}>
+      <IOSDevice dark>
+        {body}
+      </IOSDevice>
+      {toast && (
+        <div key={toast.key} style={{
+          position: 'absolute',
+          left: '50%', bottom: 80,
+          transform: 'translateX(-50%)',
+          padding: '8px 14px',
+          background: '#18181d', border: `1px solid ${
+            toast.kind === 'good' ? lPalette.goodGreen :
+            toast.kind === 'bad'  ? lPalette.badRed    :
+                                    lPalette.warnYellow
+          }`,
+          fontFamily: lFonts.mono, fontSize: 11, color: lPalette.fg,
+          letterSpacing: 0.6, textTransform: 'uppercase',
+          zIndex: 70, whiteSpace: 'nowrap',
+          animation: 'ltoast 2.4s ease-out forwards',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: 3,
+            background: toast.kind === 'good' ? lPalette.goodGreen : toast.kind === 'bad' ? lPalette.badRed : lPalette.warnYellow
+          }}/>
+          {toast.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function firstSentence(s) {
+  if (!s) return "";
+  const m = s.match(/^[^.!?]+[.!?]/);
+  return (m ? m[0] : s).trim().slice(0, 80);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

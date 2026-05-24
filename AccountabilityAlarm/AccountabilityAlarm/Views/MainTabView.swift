@@ -2,25 +2,30 @@ import SwiftUI
 
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
+    @State private var activeTab: LTab = .alarms
 
     var body: some View {
         @Bindable var appState = appState
 
-        TabView {
-            AlarmListView()
-                .tabItem {
-                    Label("Alarms", systemImage: "alarm")
-                }
+        ZStack(alignment: .bottom) {
+            L.Palette.bg.ignoresSafeArea()
 
-            HistoryView()
-                .tabItem {
-                    Label("History", systemImage: "clock.arrow.circlepath")
+            Group {
+                switch activeTab {
+                case .alarms:  AlarmListView()
+                case .history: HistoryView()
                 }
+            }
+            .padding(.bottom, 50) // reserve room for the tab bar
+
+            LTabBar(active: $activeTab)
         }
-        .sheet(isPresented: $appState.showConversation) {
+        .preferredColorScheme(.dark)
+        .fullScreenCover(isPresented: $appState.showConversation) {
             if let alarmId = appState.activeAlarmId,
                let ring = appState.activeRing {
                 ConversationView(alarmId: alarmId, initialRing: ring)
+                    .preferredColorScheme(.dark)
             }
         }
     }

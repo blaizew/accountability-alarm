@@ -4,6 +4,7 @@ import SwiftData
 @main
 struct AccountabilityAlarmApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -28,5 +29,15 @@ struct AccountabilityAlarmApp: App {
                 .environment(appDelegate.appState)
         }
         .modelContainer(sharedModelContainer)
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                Task { @MainActor in
+                    let context = sharedModelContainer.mainContext
+                    let alarms = (try? context.fetch(FetchDescriptor<Alarm>())) ?? []
+                    await AlarmKitService.shared.reconcileOnAppOpen(alarms: alarms)
+                    try? context.save()
+                }
+            }
+        }
     }
 }

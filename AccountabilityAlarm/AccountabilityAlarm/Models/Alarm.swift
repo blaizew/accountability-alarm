@@ -15,6 +15,21 @@ final class Alarm {
     var nextMorningEventHour: Int?
     var nextMorningEventMinute: Int?
     var escalationLevelRaw: String = "firm"
+    /// When non-nil and in the future, the alarm is currently snoozed and
+    /// will re-fire at this date. Cleared (or left stale) once the snooze
+    /// notification fires.
+    var snoozedUntil: Date?
+    /// AlarmKit alarm IDs we own for this alarm config. For repeating alarms
+    /// this can hold one UUID per scheduled weekday; for one-shot just one.
+    /// We store the UUIDs so we can later call `AlarmManager.cancel(id:)`.
+    var alarmKitIdStrings: [String] = []
+    /// AlarmKit ID of the currently-pending pre-emptive snooze, if any.
+    /// Cleared on comply/override. Re-set on snooze duration changes.
+    var pendingSnoozeIdString: String?
+    /// AlarmKit ID of the next-occurrence T+1 companion alarm. T+0 alarms are
+    /// recurring weekly; T+1 companions are one-shot, refreshed each time the
+    /// user interacts with the alarm so they remain individually cancellable.
+    var nextT1IdString: String?
 
     var escalationLevel: EscalationLevel {
         get { EscalationLevel(rawValue: escalationLevelRaw) ?? .firm }
