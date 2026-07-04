@@ -125,10 +125,11 @@ struct LCommitmentField: View {
                 } label: {
                     ZStack {
                         Circle()
-                            .fill(L.Palette.fg)
+                            .fill(speech.isListening ? L.Palette.badRed : L.Palette.fg)
                         L.Mic(size: 18, color: L.Palette.bg)
                     }
                     .frame(width: 48, height: 48)
+                    .animation(.easeInOut(duration: 0.15), value: speech.isListening)
                 }
                 .buttonStyle(.plain)
 

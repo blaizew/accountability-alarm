@@ -266,11 +266,14 @@ struct ConversationView: View {
             } label: {
                 ZStack {
                     Circle()
-                        .fill(vm.isCompleted ? L.Palette.bg3 : L.Palette.fg)
+                        .fill(vm.isCompleted
+                              ? L.Palette.bg3
+                              : (speech.isListening ? L.Palette.badRed : L.Palette.fg))
                         .opacity(vm.isCompleted ? 0.5 : 1.0)
                     L.Mic(size: 22, color: L.Palette.bg)
                 }
                 .frame(width: 56, height: 56)
+                .animation(.easeInOut(duration: 0.15), value: speech.isListening)
             }
             .buttonStyle(.plain)
             .disabled(vm.isCompleted)
