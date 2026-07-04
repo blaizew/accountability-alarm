@@ -1,5 +1,6 @@
 import AlarmKit
 import Foundation
+import SwiftData
 import SwiftUI
 import AppIntents
 
@@ -9,15 +10,18 @@ private typealias AKAlarm = AlarmKit.Alarm
 
 /// Wraps the iOS 26 AlarmKit API.
 ///
-/// AlarmKit alarms ring through Silent, DnD, and Focus modes at alarm-tier
-/// volume — no Critical Alerts entitlement required. Each Alarm in our model
-/// is backed by one (or one-per-weekday) AlarmKit alarm. When the alarm fires,
-/// the system shows a full-screen alert with two buttons:
-///   • "Talk to past-self" — runs OpenConversationIntent, which launches the
-///     app and opens the conversation.
-///   • Stop — the standard system stop (Apple may force this to exist).
-/// The pre-emptive-snooze safety net (scheduled when the conversation opens)
-/// catches users who tap the system Stop or never engage.
+/// Each Alarm in our model is backed by one (or one-per-weekday) AlarmKit
+/// alarm. When the alarm fires, the system shows a full-screen alert with two
+/// buttons:
+///   • "Talk to past-self" — secondaryIntent runs `OpenConversationIntent`,
+///     which launches the app and opens the conversation. This path requires
+///     the app to launch, so it doesn't work under Screen Time Downtime.
+///   • "Slide to Stop" — stopIntent runs `SnoozeStopIntent`, which schedules
+///     a 5-minute snooze in the background. Critically, this runs WITHOUT
+///     launching the app, so it works even when Downtime restricts the app.
+///
+/// The only way to truly silence the alarm is for the user to engage with the
+/// conversation and have the LLM authorize Comply.
 @MainActor
 final class AlarmKitService {
     static let shared = AlarmKitService()
@@ -25,9 +29,8 @@ final class AlarmKitService {
 
     private let manager = AlarmManager.shared
 
-    /// Metadata payload attached to every AlarmKit alarm. We don't need much —
-    /// the alarmId on the App Intent is sufficient to route into the right
-    /// conversation. This empty Metadata satisfies the generic constraint.
+    /// Metadata attached to every AlarmKit alarm. Empty for now — we route
+    /// state through SwiftData using the alarmId carried on the intents.
     struct Metadata: AlarmMetadata {}
 
     // MARK: - Observation
@@ -36,16 +39,29 @@ final class AlarmKitService {
     /// by the long-lived task started by `startObserving()`. Used by the
     /// reconcile pass to detect orphaned AlarmKit alarms (those not tied to
     /// any active Alarm in our SwiftData store).
-    private var observedAlarmKitIds: Set<UUID> = []
-    private var observerTask: Task<Void, Never>?
+    ///
+    /// Wrapped in an actor so the observer task can run *off* the main actor
+    /// and not block the launch path while AlarmKit's daemon initializes.
+    private actor ObservedState {
+        var ids: Set<UUID> = []
+        func update(_ next: Set<UUID>) { ids = next }
+        func snapshot() -> Set<UUID> { ids }
+    }
+    private let observed = ObservedState()
 
-    /// Begin observing AlarmKit's state. Call once at app launch.
-    func startObserving() {
-        guard observerTask == nil else { return }
-        observerTask = Task { [weak self] in
+    /// Re-entrancy guard for reconcile — scenePhase can flap .active quickly
+    /// (app switcher, notification pull-down) and overlapping passes could
+    /// double-insert missed events or race the orphan scan.
+    private var isReconciling = false
+
+    /// Begin observing AlarmKit's state. Call once at app launch. The task
+    /// runs detached so the initial `alarmUpdates` await doesn't block main.
+    nonisolated func startObserving() {
+        Task.detached(priority: .background) { [weak self] in
             guard let self else { return }
-            for await alarms in self.manager.alarmUpdates {
-                self.observedAlarmKitIds = Set(alarms.map { $0.id })
+            for await alarms in AlarmManager.shared.alarmUpdates {
+                let ids = Set(alarms.map { $0.id })
+                await self.observed.update(ids)
             }
         }
     }
@@ -62,6 +78,7 @@ final class AlarmKitService {
             let state = try await manager.requestAuthorization()
             return state == .authorized
         } catch {
+            await LogService.shared.log(.alarmkit, "requestAuthorization failed: \(error.localizedDescription)", isError: true)
             return false
         }
     }
@@ -71,11 +88,6 @@ final class AlarmKitService {
     /// Schedules an AlarmKit alarm for the user's configured time.
     /// Returns the UUIDs of the scheduled alarms (one per weekday for repeating,
     /// otherwise one). The caller persists them on the Alarm so we can cancel later.
-    /// Schedules T+0 (recurring weekly for repeating alarms, or one-shot for
-    /// non-repeating) and bootstraps the first T+1 companion. Subsequent T+1
-    /// companions are refreshed lazily by `refreshNextCompanion(_:)` whenever
-    /// the user interacts with an alarm, so each companion remains
-    /// individually cancellable on the next interaction.
     @discardableResult
     func scheduleAlarm(_ alarm: Alarm) async -> [UUID] {
         await cancelAlarm(alarm)
@@ -89,77 +101,22 @@ final class AlarmKitService {
                 ids.append(id)
             }
         } else {
-            for day in alarm.repeatDays {
-                guard let weekday = WeekdayBridge.from(day1Sun: day) else { continue }
+            // One AlarmKit alarm covering all selected weekdays. `.weekly()`
+            // accepts an array — passing all weekdays in a single schedule
+            // beats N separate alarms (N IDs to track, N chances to orphan).
+            let weekdays = alarm.repeatDays.compactMap { WeekdayBridge.from(day1Sun: $0) }
+            if !weekdays.isEmpty {
                 let time = AKAlarm.Schedule.Relative.Time(hour: alarm.hour, minute: alarm.minute)
                 let schedule: AKAlarm.Schedule = .relative(
-                    .init(time: time, repeats: .weekly([weekday]))
+                    .init(time: time, repeats: .weekly(weekdays))
                 )
                 if let id = await scheduleOne(alarm: alarm, schedule: schedule, isSnooze: false) {
                     ids.append(id)
                 }
             }
         }
+        await LogService.shared.log(.alarmkit, "scheduleAlarm: \(ids.count) alarm(s) for \(alarm.label.isEmpty ? "(no label)" : alarm.label) @ \(alarm.hour):\(String(format: "%02d", alarm.minute)) on \(alarm.repeatDays.count) day(s)", alarmId: alarm.id.uuidString)
         return ids
-    }
-
-    /// Bootstrap the FIRST T+1 companion. Called at alarm creation / edit /
-    /// re-enable time. For one-shot alarms this schedules T+1 for that one
-    /// occurrence. For recurring it schedules T+1 for the next upcoming T+0.
-    @discardableResult
-    func scheduleFirstCompanion(for alarm: Alarm) async -> UUID? {
-        let nextT0 = nextRecurringOrUpcomingT0(for: alarm)
-        guard let nextT0 else { return nil }
-        let t1Date = nextT0.addingTimeInterval(60)
-        return await scheduleOne(alarm: alarm, schedule: AKAlarm.Schedule.fixed(t1Date), isSnooze: false)
-    }
-
-    /// Refresh the T+1 companion when the user is interacting with an
-    /// already-fired T+0. Cancels the imminent T+1 (today's — about to fire
-    /// or just fired) and, for recurring alarms, schedules a fresh one-shot
-    /// for the next future T+0. For one-shot alarms returns nil — there's
-    /// no "next instance" once the T+0 has been consumed.
-    @discardableResult
-    func refreshNextCompanion(for alarm: Alarm) async -> UUID? {
-        if let s = alarm.nextT1IdString, let oldId = UUID(uuidString: s) {
-            await cancel(alarmKitId: oldId)
-        }
-        guard !alarm.repeatDays.isEmpty else { return nil }
-        guard let nextT0 = nextRecurringT0(for: alarm) else { return nil }
-        let t1Date = nextT0.addingTimeInterval(60)
-        return await scheduleOne(alarm: alarm, schedule: AKAlarm.Schedule.fixed(t1Date), isSnooze: false)
-    }
-
-    /// Next T+0 datetime: for recurring, the next weekday match; for one-shot,
-    /// the next hour:minute occurrence (rolls forward if today's time is past).
-    private func nextRecurringOrUpcomingT0(for alarm: Alarm) -> Date? {
-        if alarm.repeatDays.isEmpty {
-            return nextOccurrence(hour: alarm.hour, minute: alarm.minute)
-        }
-        return nextRecurringT0(for: alarm)
-    }
-
-    /// Next future T+0 datetime for a *recurring* alarm. Nil if no weekday
-    /// in the next 7 days matches. Past today's time-of-day on a matching
-    /// weekday is correctly skipped.
-    private func nextRecurringT0(for alarm: Alarm) -> Date? {
-        let cal = Calendar.current
-        let now = Date()
-        var earliest: Date?
-        for offset in 0...7 {
-            guard let day = cal.date(byAdding: .day, value: offset, to: now) else { continue }
-            let weekday = cal.component(.weekday, from: day)
-            guard alarm.repeatDays.contains(weekday) else { continue }
-            var comps = cal.dateComponents([.year, .month, .day], from: day)
-            comps.hour = alarm.hour
-            comps.minute = alarm.minute
-            comps.second = 0
-            guard let datetime = cal.date(from: comps), datetime > now else { continue }
-            if earliest == nil || datetime < earliest! {
-                earliest = datetime
-            }
-        }
-        return earliest
     }
 
     /// Schedules a one-shot snooze alarm `minutes` from now. Returns the UUID.
@@ -167,6 +124,29 @@ final class AlarmKitService {
     func scheduleSnooze(alarm: Alarm, minutes: Int) async -> UUID? {
         let date = Date().addingTimeInterval(TimeInterval(minutes * 60))
         return await scheduleOne(alarm: alarm, schedule: AKAlarm.Schedule.fixed(date), isSnooze: true)
+    }
+
+    /// Called from `SnoozeStopIntent` when the user taps the system Stop
+    /// button. Cancels any prior pending snooze and schedules a fresh one.
+    /// Single source of truth for "Stop tapped — re-ring in N minutes."
+    /// Mutates `alarm.pendingSnoozeIdString` and `alarm.snoozedUntil`;
+    /// caller is expected to save the context.
+    func handleStopSnooze(alarm: Alarm, minutes: Int) async {
+        // Never re-arm a disabled alarm — Stop on a still-ringing alert for
+        // an alarm the user just toggled off must not schedule anything.
+        guard alarm.enabled else {
+            await LogService.shared.log(.alarmkit, "handleStopSnooze: alarm disabled — skipping", alarmId: alarm.id.uuidString)
+            return
+        }
+        await LogService.shared.log(.alarmkit, "handleStopSnooze: \(minutes) min", alarmId: alarm.id.uuidString)
+
+        if let s = alarm.pendingSnoozeIdString, let oldId = UUID(uuidString: s) {
+            await cancel(alarmKitId: oldId)
+        }
+        if let newId = await scheduleSnooze(alarm: alarm, minutes: minutes) {
+            alarm.pendingSnoozeIdString = newId.uuidString
+            alarm.snoozedUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        }
     }
 
     /// Single schedule-call helper. The explicit type annotation pins down the
@@ -180,6 +160,7 @@ final class AlarmKitService {
         let config: AlarmManager.AlarmConfiguration<Metadata> = .init(
             schedule: schedule,
             attributes: attributes,
+            stopIntent: SnoozeStopIntent(alarmId: alarm.id.uuidString),
             secondaryIntent: OpenConversationIntent(alarmId: alarm.id.uuidString)
         )
         let id = UUID()
@@ -187,71 +168,207 @@ final class AlarmKitService {
             _ = try await manager.schedule(id: id, configuration: config)
             return id
         } catch {
-            NSLog("AlarmKit schedule failed: \(error.localizedDescription)")
+            await LogService.shared.log(.alarmkit, "schedule failed: \(error.localizedDescription)", alarmId: alarm.id.uuidString, isError: true)
             return nil
         }
     }
 
+    /// Cancels a scheduled alarm. No-op if already cancelled/fired.
     func cancel(alarmKitId: UUID) async {
         do {
             try manager.cancel(id: alarmKitId)
+            await LogService.shared.log(.alarmkit, "cancel \(alarmKitId.uuidString.prefix(8))", alarmKitId: alarmKitId.uuidString)
         } catch {
             // Already cancelled or fired — fine.
+        }
+    }
+
+    /// Stops a currently-ringing alarm. Different from cancel — stop silences
+    /// an actively-firing alarm, cancel removes a scheduled future alarm.
+    /// Idempotent and error-tolerant.
+    func stop(alarmKitId: UUID) async {
+        do {
+            try manager.stop(id: alarmKitId)
+            await LogService.shared.log(.alarmkit, "stop \(alarmKitId.uuidString.prefix(8))", alarmKitId: alarmKitId.uuidString)
+        } catch {
+            // Not currently ringing — fine, that's the common case.
+        }
+    }
+
+    /// Stops every AlarmKit alarm associated with this Alarm record. Called
+    /// when the conversation opens to silence anything actively ringing —
+    /// covers the Downtime-collision case where the secondary button tap
+    /// didn't dispatch the intent in time to silence the original alarm.
+    func stopAllActive(_ alarm: Alarm) async {
+        for s in alarm.alarmKitIdStrings {
+            if let id = UUID(uuidString: s) { await stop(alarmKitId: id) }
+        }
+        if let s = alarm.pendingSnoozeIdString, let id = UUID(uuidString: s) {
+            await stop(alarmKitId: id)
         }
     }
 
     // MARK: - Reconciliation
 
     /// Run on every app open / scene becoming active. Does three things:
-    ///   1. For each enabled recurring alarm, refresh the T+1 companion so
-    ///      it always points at the next upcoming occurrence.
-    ///   2. For each disabled alarm, ensure all of its AlarmKit IDs are
+    ///   1. For each disabled alarm, ensure all of its AlarmKit IDs are
     ///      cancelled (cleans up any straggler from a previous bad shutdown).
-    ///   3. Cross-reference AlarmKit's current alarm set (from the
-    ///      `alarmUpdates` observer) against the SwiftData store and cancel
-    ///      any orphans — AlarmKit alarms not tracked by any Alarm record.
-    ///      This handles the "user deleted an alarm but cancellation didn't
-    ///      complete" case.
+    ///   2. Cross-reference AlarmKit's current alarm set against the
+    ///      SwiftData store and cancel any orphans — AlarmKit alarms not
+    ///      tracked by any Alarm record. This handles the "user deleted an
+    ///      alarm but cancellation didn't complete" case.
+    ///   3. Record firings the user never engaged with as "ignored" ledger
+    ///      entries, and close out abandoned wake-up chains. No re-ring is
+    ///      scheduled — by design a firing nobody touches ends the chain —
+    ///      but the ledger has to tell the truth about it.
     ///
     /// The caller is expected to `try? context.save()` afterwards.
     @MainActor
-    func reconcileOnAppOpen(alarms: [Alarm]) async {
-        // 1 & 2: SwiftData-driven reconcile.
+    func reconcileOnAppOpen(alarms: [Alarm], context: ModelContext) async {
+        guard !isReconciling else { return }
+        isReconciling = true
+        defer { isReconciling = false }
+
+        await LogService.shared.log(.app, "reconcileOnAppOpen: \(alarms.count) alarms")
+
         var trackedIds: Set<UUID> = []
         for alarm in alarms {
+            await Task.yield()
+
             if !alarm.enabled {
-                await cancelAlarm(alarm)
-                alarm.alarmKitIdStrings = []
-                alarm.nextT1IdString = nil
-                alarm.pendingSnoozeIdString = nil
+                let hasDanglers = !alarm.alarmKitIdStrings.isEmpty
+                    || alarm.pendingSnoozeIdString != nil
+                if hasDanglers {
+                    await cancelAlarm(alarm)
+                    alarm.alarmKitIdStrings = []
+                    alarm.pendingSnoozeIdString = nil
+                }
                 continue
             }
-            // For recurring alarms, refresh the T+1 companion. (No-op for
-            // one-shots, which can't have a "next instance".)
-            if !alarm.repeatDays.isEmpty {
-                let newT1 = await refreshNextCompanion(for: alarm)
-                alarm.nextT1IdString = newT1?.uuidString
-            }
-            // Collect all IDs this alarm still owns.
+
             for s in alarm.alarmKitIdStrings {
                 if let u = UUID(uuidString: s) { trackedIds.insert(u) }
-            }
-            if let s = alarm.nextT1IdString, let u = UUID(uuidString: s) {
-                trackedIds.insert(u)
             }
             if let s = alarm.pendingSnoozeIdString, let u = UUID(uuidString: s) {
                 trackedIds.insert(u)
             }
         }
 
-        // 3: Orphan cleanup. `observedAlarmKitIds` is populated by the
-        // alarmUpdates observer. If observation hasn't emitted yet (first
-        // launch before any state change), this set is empty and the
-        // orphan pass is a no-op — which is fine; nothing to clean up.
-        let orphans = observedAlarmKitIds.subtracting(trackedIds)
+        // Orphan cleanup. Query AlarmKit directly — the alarmUpdates observer
+        // may not have emitted yet this early in a launch, and skipping the
+        // pass on an empty snapshot left orphans alive for the whole session.
+        let observedIds: Set<UUID>
+        if let live = try? manager.alarms {
+            observedIds = Set(live.map(\.id))
+        } else {
+            observedIds = await observed.snapshot()
+        }
+        let orphans = observedIds.subtracting(trackedIds)
+        if !orphans.isEmpty {
+            await LogService.shared.log(.app, "reconcile: cancelling \(orphans.count) orphan AlarmKit alarms")
+        }
         for orphanId in orphans {
+            await Task.yield()
             await cancel(alarmKitId: orphanId)
         }
+
+        await recordMissedFirings(alarms: alarms, context: context)
+        await closeAbandonedChains(context: context)
+    }
+
+    /// A firing counts as engaged if ANY AlarmEvent exists near the due time
+    /// — both opening the conversation and tapping the system Stop button
+    /// create (or reuse) the chain's event. No event, no live snooze, and
+    /// we're past the grace window ⇒ the user slept through it, muted it
+    /// with a hardware button, or swiped the alert away. None of those are
+    /// detectable in the moment (AlarmKit gives no callback), so this is
+    /// where the ledger learns the day was missed.
+    private func recordMissedFirings(alarms: [Alarm], context: ModelContext) async {
+        let now = Date()
+        for alarm in alarms {
+            guard alarm.enabled else { continue }
+            // A live snooze means the chain is still in flight — not missed.
+            if let until = alarm.snoozedUntil, until > now { continue }
+            guard let due = lastDueFireDate(for: alarm, now: now) else { continue }
+            guard due > alarm.createdAt else { continue }
+
+            let graceEnd = due.addingTimeInterval(TimeInterval(Constants.missedGraceMinutes) * 60)
+            let lookbackEnd = due.addingTimeInterval(TimeInterval(Constants.missedLookbackHours) * 3600)
+            guard now > graceEnd, now < lookbackEnd else { continue }
+
+            // Any event at/after (or shortly before) the due time — pending,
+            // resolved, or an earlier "ignored" from a previous pass — means
+            // this firing is already accounted for.
+            let window = due.addingTimeInterval(-3600)
+            if alarm.events.contains(where: { $0.firedAt > window }) { continue }
+
+            let missed = AlarmEvent(alarm: alarm)
+            missed.firedAt = due
+            missed.outcome = "ignored"
+            context.insert(missed)
+            await LogService.shared.log(
+                .app,
+                "reconcile: recorded ignored firing (no engagement) due=\(due)",
+                alarmId: alarm.id.uuidString
+            )
+        }
+    }
+
+    /// Close wake-up chains that started (Stop tapped or conversation
+    /// opened) but were then abandoned — the pending event would otherwise
+    /// sit unresolved forever and silently vanish from compliance stats.
+    private func closeAbandonedChains(context: ModelContext) async {
+        let cutoff = Date().addingTimeInterval(-TimeInterval(Constants.chainWindowHours) * 3600)
+        let predicate = #Predicate<AlarmEvent> {
+            $0.outcome == "pending" && $0.firedAt < cutoff
+        }
+        guard let stale = try? context.fetch(FetchDescriptor(predicate: predicate)) else { return }
+        for event in stale {
+            // Chain snoozed into the future is still alive; leave it.
+            if let until = event.alarm?.snoozedUntil, until > Date() { continue }
+            event.outcome = "ignored"
+            await LogService.shared.log(
+                .app,
+                "reconcile: closed abandoned chain as ignored (fired \(event.firedAt))",
+                alarmId: event.alarm?.id.uuidString
+            )
+        }
+    }
+
+    /// The most recent scheduled fire time that is in the past, or nil if
+    /// this alarm hasn't been due yet.
+    ///
+    /// Repeating alarms are exact (weekday + hour:minute). One-shots are an
+    /// approximation — the first hour:minute occurrence after creation —
+    /// because the original scheduled date isn't persisted; the caller's
+    /// createdAt/grace/lookback guards bound the error.
+    private func lastDueFireDate(for alarm: Alarm, now: Date) -> Date? {
+        let cal = Calendar.current
+
+        if alarm.repeatDays.isEmpty {
+            var comps = cal.dateComponents([.year, .month, .day], from: alarm.createdAt)
+            comps.hour = alarm.hour
+            comps.minute = alarm.minute
+            comps.second = 0
+            guard var candidate = cal.date(from: comps) else { return nil }
+            if candidate <= alarm.createdAt {
+                candidate = cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+            }
+            return candidate <= now ? candidate : nil
+        }
+
+        // Walk back day by day to the latest scheduled weekday occurrence.
+        for back in 0..<8 {
+            guard let day = cal.date(byAdding: .day, value: -back, to: now) else { continue }
+            var comps = cal.dateComponents([.year, .month, .day], from: day)
+            comps.hour = alarm.hour
+            comps.minute = alarm.minute
+            comps.second = 0
+            guard let candidate = cal.date(from: comps), candidate <= now else { continue }
+            let weekday = cal.component(.weekday, from: candidate) // 1=Sun matches repeatDays
+            if alarm.repeatDays.contains(weekday) { return candidate }
+        }
+        return nil
     }
 
     func cancelAlarm(_ alarm: Alarm) async {
@@ -261,17 +378,16 @@ final class AlarmKitService {
         if let s = alarm.pendingSnoozeIdString, let id = UUID(uuidString: s) {
             await cancel(alarmKitId: id)
         }
-        if let s = alarm.nextT1IdString, let id = UUID(uuidString: s) {
-            await cancel(alarmKitId: id)
-        }
     }
 
     // MARK: - Helpers
 
     private func alertContent(for alarm: Alarm, isSnooze: Bool = false) -> AlarmPresentation.Alert {
-        // Every alarm fire — original or companion — uses the same title so
-        // the user can't tell from the UI whether they've already missed one.
-        let title: LocalizedStringResource = "Talk to Past Self or alarm will sound again in 1 minute"
+        // Title = the alarm's label. AlarmKit renders this large; long
+        // instructional text gets truncated and is unreadable.
+        let title = LocalizedStringResource(
+            stringLiteral: alarm.label.isEmpty ? "Alarm" : alarm.label
+        )
 
         let talkButton = AlarmButton(
             text: "Talk to past-self",
@@ -280,7 +396,8 @@ final class AlarmKitService {
         )
 
         // iOS 26.1+: the stopButton parameter is deprecated. The system now
-        // owns the stop affordance — we only supply the secondary action.
+        // owns the stop affordance — we supply behavior via `stopIntent` on
+        // the AlarmConfiguration.
         return AlarmPresentation.Alert(
             title: title,
             secondaryButton: talkButton,
@@ -321,21 +438,6 @@ private enum WeekdayBridge {
         case 6: return .friday
         case 7: return .saturday
         default: return nil
-        }
-    }
-
-    /// Next weekday in calendar order. Used for the companion alarm when it
-    /// crosses midnight relative to the original.
-    static func next(_ day: Locale.Weekday) -> Locale.Weekday {
-        switch day {
-        case .sunday:    return .monday
-        case .monday:    return .tuesday
-        case .tuesday:   return .wednesday
-        case .wednesday: return .thursday
-        case .thursday:  return .friday
-        case .friday:    return .saturday
-        case .saturday:  return .sunday
-        @unknown default: return day
         }
     }
 }

@@ -9,16 +9,17 @@ final class ConversationEngine {
     /// Returning *no* tool means "I'm still talking; keep the conversation going."
     static let tools: [ClaudeAPIService.Tool] = [
         .init(
-            name: "authorize_comply",
+            name: "authorize_action",
             description: """
                 Call this when you are convinced the user is genuinely about to follow \
-                through. This does NOT stop the alarm yet — it enables a Comply button \
-                in the UI that the user must then physically tap to confirm. This two-step \
-                pattern prevents fake compliance from a cheap "yeah". Only call when the \
-                user has told you something concrete about what they're doing (e.g. "feet \
-                on the floor", "closing the laptop now"), not just generic agreement. \
-                You may keep talking after authorizing; you can include a short ack like \
-                "okay — tap Comply when you're up" alongside this tool call.
+                through. It unlocks the "DOING IT" button — the alarm chain only \
+                actually stops when the user physically taps it. That tap is the real \
+                confirmation: a typed "yeah I'm up" from under the covers can't kill \
+                the alarm by itself. Only call when the user has told you something \
+                concrete about what they're doing (e.g. "feet on the floor", "closing \
+                the laptop now"), NOT generic agreement like "yeah" or "ok". Pair the \
+                tool call with a short ack that points at the button: "okay — hit \
+                DOING IT and go."
                 """,
             input_schema: .object([
                 "type": .string("object"),
@@ -29,9 +30,10 @@ final class ConversationEngine {
             name: "set_snooze_duration",
             description: """
                 Set how many minutes the Snooze button will snooze for when the user taps \
-                it. The button is always visible to the user. Default is 3 minutes. Only \
-                raise this if the user gives you a concrete reason ("I'm finishing this \
-                email, give me 8"). Vague requests for "longer" should be pushed back on. \
+                it. The button is always visible to the user; its current duration is \
+                stated in the system prompt. Only raise it if the user gives you a \
+                concrete reason ("I'm finishing this email, give me 8"). Vague requests \
+                for "longer" should be pushed back on. \
                 This does NOT snooze the alarm — use snooze_alarm for that.
                 """,
             input_schema: .object([
@@ -52,11 +54,13 @@ final class ConversationEngine {
             description: """
                 Call this when the user wants more time but isn't outright refusing. \
                 A real OS notification will fire again after `minutes` minutes — this \
-                survives the app being closed. DEFAULT is 3 minutes. Only extend \
-                beyond 3 if the user gives you a CONCRETE reason (e.g. "I'm finishing \
-                this email, give me 8"). Vague hedging is not a reason. Long snoozes \
-                (>15 min) are usually disguised overrides and should be rare. \
-                The user cannot manually stop the alarm — they get the snooze you choose.
+                survives the app being closed. Keep snoozes SHORT — the Snooze \
+                button's current duration (in the system prompt) is your baseline. \
+                Only extend beyond it if the user gives you a CONCRETE reason (e.g. \
+                "I'm finishing this email, give me 8"). Vague hedging is not a reason. \
+                Long snoozes (>15 min) are usually disguised overrides and should be \
+                rare. The user cannot manually stop the alarm — they get the snooze \
+                you choose.
                 """,
             input_schema: .object([
                 "type": .string("object"),
@@ -65,7 +69,7 @@ final class ConversationEngine {
                         "type": .string("integer"),
                         "minimum": .int(1),
                         "maximum": .int(30),
-                        "description": .string("How many minutes from now to ring again. Default 3.")
+                        "description": .string("How many minutes from now to ring again.")
                     ]),
                     "user_committed": .object([
                         "type": .string("boolean"),
@@ -80,9 +84,9 @@ final class ConversationEngine {
             description: """
                 Call this when the user has clearly refused. Stops the alarm and logs \
                 'overridden' with the reason they gave (or your best inference of it). \
-                Resets their streak. For Relentless escalation, only call after pushing \
-                back at least twice unless the reason is genuinely urgent (emergency, \
-                on-call fire, family). For Gentle, call quickly — don't badger.
+                Resets their streak. Push back at least once on dismissive answers before \
+                calling this, unless the reason is genuinely urgent (emergency, on-call \
+                fire, family).
                 """,
             input_schema: .object([
                 "type": .string("object"),
@@ -98,26 +102,12 @@ final class ConversationEngine {
                 ]),
                 "required": .array([.string("reason")])
             ])
-        ),
-        .init(
-            name: "escalate_ring",
-            description: """
-                Call this to escalate the conversation tone to the next ring. Order: \
-                nudge → math → mirror → preview. Use when the user is being evasive or \
-                dismissive and your current ring's approach isn't landing. Emit your \
-                next text message in the new ring's style as part of the SAME response. \
-                Don't escalate more than once per response. Cannot escalate past preview.
-                """,
-            input_schema: .object([
-                "type": .string("object"),
-                "properties": .object([:])
-            ])
         )
     ]
 
     // MARK: - System prompt
 
-    func buildSystemPrompt(alarm: Alarm, ring: EscalationRing, event: AlarmEvent?) -> String {
+    func buildSystemPrompt(alarm: Alarm, event: AlarmEvent?, snoozeButtonMinutes: Int) -> String {
         var parts: [String] = []
 
         parts.append("""
@@ -128,13 +118,42 @@ final class ConversationEngine {
         what the alarm is for — use only the information given.
         """)
 
-        parts.append(escalationPersonality(alarm.escalationLevel))
+        parts.append("""
+        PERSONALITY: Direct, focused accountability partner. Matter-of-fact tone — no \
+        warm-fuzzy, no scolding. State things clearly. Push back once when dismissed. \
+        Short sentences, no fluff.
+        """)
 
         parts.append("Alarm label: \(alarm.label.isEmpty ? "Alarm" : alarm.label)")
         parts.append("Alarm time: \(alarm.timeString)")
-        parts.append("Current escalation ring: \(ring.label) (\(ring.ringDescription))")
 
-        if !alarm.reasonText.isEmpty {
+        // Five-box commitment fields. Each box is passed with its question
+        // title so the LLM understands the framing. Empty boxes are skipped.
+        let commitmentBoxes: [(String, String)] = [
+            ("Desired behavior", alarm.desiredBehavior),
+            ("Why do you want this?", alarm.whyWantThis),
+            ("What positive outcome happens when you do it", alarm.positiveOutcome),
+            ("What negative outcome happens when you don't do it", alarm.negativeOutcome),
+            ("What is the long-term impact of not doing this?", alarm.longTermImpact),
+        ]
+        let filled = commitmentBoxes.filter { !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        if !filled.isEmpty {
+            var lines = ["User's commitment for this alarm (their own words when they set it):"]
+            for (title, content) in filled {
+                lines.append("\n\(title):\n\"\(content)\"")
+            }
+            lines.append("""
+
+            This is the most important context. Use these answers to understand what the \
+            alarm is about and to hold the user accountable to their own stated intention. \
+            Quote specific phrases back when they're hedging — especially the negative \
+            outcomes and long-term impact, which is the user pre-arguing against their \
+            future excuses.
+            """)
+            parts.append(lines.joined(separator: "\n"))
+        } else if !alarm.reasonText.isEmpty {
+            // Legacy alarms created before the five-box model.
             parts.append("""
             User's reason for this alarm (their own words when they set it): "\(alarm.reasonText)"
             This is the most important context. Use it to understand what the alarm is about \
@@ -142,181 +161,100 @@ final class ConversationEngine {
             """)
         }
 
-        if let event, event.snoozeCount > 0 {
-            parts.append("Snooze count so far: \(event.snoozeCount)")
-        }
+        // Always pass the snooze count, even at 0. The LLM uses this to
+        // calibrate how skeptical to be — every additional snooze in this
+        // session is evidence the user is dodging.
+        let snoozes = event?.snoozeCount ?? 0
+        parts.append("""
+        Snooze count this session: \(snoozes)
 
-        parts.append(ringInstructions(ring, level: alarm.escalationLevel))
-        parts.append(toneGuidelines(alarm.escalationLevel))
+        How to weigh the snooze count:
+        - 0 snoozes: standard skepticism. Take the user's first response at face value but
+          probe for specifics before authorizing.
+        - 1 snooze: they've already pushed back once. Be more skeptical of vague answers.
+          Ask what changed since the last snooze. Don't accept "just a few more minutes."
+        - 2 snoozes: the pattern is forming. Name it explicitly ("you've snoozed twice").
+          Demand a concrete action ("what's the actual first step you'll take"), not an
+          intention. Push back harder on hedging.
+        - 3+ snoozes: this is no longer a check-in, it's avoidance. Be direct:
+          "You're not doing this." Either get a real commitment or call mark_overridden
+          and end the cycle. Don't let them keep snoozing indefinitely.
+        """)
+
+        parts.append("""
+        Guidelines:
+        - Direct and factual.
+        - Reference their reason without quoting it verbatim.
+        - 2-3 sentences max.
+        - Never lecture or be condescending.
+        """)
+
+        // Opening turn — when the very first user message is "[alarm fired]"
+        // or "[alarm re-fired after snooze]" (synthetic triggers, not
+        // something the user actually typed), this is the LLM's cue to
+        // generate the conversation's opening.
+        parts.append("""
+        OPENING THE CONVERSATION:
+        Your first message in this conversation is your opener. When you see the user
+        message "[alarm fired]", that's a synthetic trigger — the user hasn't typed
+        anything yet. Respond with a SPECIFIC check-in question grounded in their
+        recorded reason. DO NOT quote their reason verbatim. DO NOT just say "time to
+        follow through" or "ready?" — those are generic.
+
+        Read the reason. Infer the concrete action. Ask about THAT action specifically.
+
+        Examples (use these as patterns, not templates):
+        - Reason mentions going to bed → "Are you heading to bed now?"
+        - Reason mentions a workout → "Are you starting that workout right now?"
+        - Reason mentions calling mom → "Are you about to call her?"
+        - Reason mentions deep work → "Closing distractions and getting into it?"
+
+        RE-RINGS: when the trigger is "[alarm re-fired after snooze]", it includes the
+        transcript of the earlier conversation(s) in this wake-up chain. This is NOT a
+        fresh start — the user already snoozed at least once. Open by holding them to
+        what THEY said last time, concretely: if they said "five more minutes to finish
+        this email", ask if the email is done. Quote their own words when they're
+        drifting. Do not re-introduce yourself or re-ask the generic opening question.
+
+        Keep the opener to one short sentence. The opener is the entire first
+        response — do not call any tools on the opening turn.
+        """)
 
         // Tool-use guidance
         parts.append("""
         HOW YOU DRIVE THE CONVERSATION:
         You are the gatekeeper for whether the alarm actually stops. The UI shows the user
-        two buttons: a Snooze button (always tappable, snoozes for whatever duration you've
-        set — default 3 min) and a Comply button (greyed out until you call authorize_comply).
+        two buttons: a Snooze button (always tappable, currently snoozes for \
+        \(snoozeButtonMinutes) min) and a "DOING IT" button (greyed out until you call
+        authorize_action).
 
         Your tools:
-        • authorize_comply — enable the Comply button. Use only when the user has given you
-          a CONCRETE commitment (specific action, not just "yeah"). Once authorized, the user
-          must still physically tap Comply to actually stop the alarm.
-        • set_snooze_duration — change how many minutes the Snooze button uses (default 3).
-          Only raise if user gives a concrete reason.
+        • authorize_action — unlock the DOING IT button. The alarm chain only stops when
+          the user physically TAPS it; your authorization alone doesn't end anything.
+          Use only when the user has given you a CONCRETE commitment (specific action,
+          not just "yeah"). Tell them to hit DOING IT — the tap is their confirmation.
+        • set_snooze_duration — change how many minutes the Snooze button uses (currently
+          \(snoozeButtonMinutes)). Only raise if user gives a concrete reason.
         • snooze_alarm — immediately snooze without waiting for the user to tap the button.
           Use when YOU decide a snooze is warranted (e.g. "I'll give you 5 minutes" mid-convo).
         • mark_overridden — YOU judge the user has a legitimate reason to skip (emergency,
           sick, etc.). Alarm stops, streak resets. Use sparingly.
-        • escalate_ring — bump the conversation to the next ring (more intense).
 
         Decision rules:
         - If you don't call a tool, the conversation continues — that's the default.
         - You can include both text and a tool call in the same response. The text is the user's
           last thing to read.
-        - DO NOT call authorize_comply just because the user said "yeah" or "ok" — read the
+        - DO NOT call authorize_action just because the user said "yeah" or "ok" — read the
           whole message. Sarcasm, hedging, and "yeah but" mean keep arguing, not authorize.
         - Be skeptical of compliance. The user typed something; that's cheap. They need to
           tell you what they're about to do, not just "fine." If they're hedging, ask a
           follow-up rather than authorizing.
-        - For Relentless escalation, push back at least twice before authorize_comply or
-          mark_overridden.
-        - For Gentle escalation, accept a clear refusal with mark_overridden after one round.
-        - Call escalate_ring when your current approach isn't landing AND you're not at preview yet.
-        - Default snooze button is 3 minutes. Only raise via set_snooze_duration if the user
-          gives a concrete reason.
+        - Push back at least once when the user is dismissive before accepting refusal via
+          mark_overridden — unless they cite a legitimate emergency.
+        - The Snooze button is currently \(snoozeButtonMinutes) minutes. Only raise via
+          set_snooze_duration if the user gives a concrete reason.
         """)
 
         return parts.joined(separator: "\n\n")
-    }
-
-    // MARK: - Opening messages (unchanged content; still used for first AI turn)
-
-    func openingMessage(alarm: Alarm, ring: EscalationRing) -> String {
-        let level = alarm.escalationLevel
-        let reason = alarm.reasonText.isEmpty ? nil : alarm.reasonText
-        let label = alarm.label.isEmpty ? "Alarm" : alarm.label
-
-        switch ring {
-        case .nudge:   return nudgeOpener(label: label, reason: reason, time: alarm.timeString, level: level)
-        case .math:    return mathOpener(label: label, reason: reason, time: alarm.timeString, level: level, alarm: alarm)
-        case .mirror:  return mirrorOpener(label: label, reason: reason, time: alarm.timeString, level: level)
-        case .preview: return previewOpener(label: label, reason: reason, time: alarm.timeString, level: level, alarm: alarm)
-        }
-    }
-
-    // MARK: - Escalation Personality
-
-    private func escalationPersonality(_ level: EscalationLevel) -> String {
-        switch level {
-        case .gentle:
-            return """
-            PERSONALITY: Gentle mode. Supportive friend. Respects autonomy completely. \
-            One soft check-in, then accepts a refusal. Warm tone.
-            """
-        case .firm:
-            return """
-            PERSONALITY: Firm mode. Direct, no-nonsense accountability partner. \
-            States facts clearly, pushes back once when dismissed, then accepts. \
-            Matter-of-fact tone.
-            """
-        case .relentless:
-            return """
-            PERSONALITY: Relentless mode. Intense accountability partner. Does NOT \
-            let them off easy. Challenges every excuse. Pushes back at least twice \
-            before calling mark_overridden. Short, punchy sentences. Intense but never cruel.
-            """
-        }
-    }
-
-    private func ringInstructions(_ ring: EscalationRing, level: EscalationLevel) -> String {
-        switch (ring, level) {
-        case (.nudge, .gentle):     return "Ring 1: Gentle check-in. Remind them of their commitment. If they say no, respect it."
-        case (.nudge, .firm):       return "Ring 1: Simple reminder. State the time and their reason. Ask if they're following through."
-        case (.nudge, .relentless): return "Ring 1: Remind firmly. State their reason and the stakes."
-        case (.math, .gentle):      return "Ring 2: Note the cost (time, events) gently. Don't press."
-        case (.math, .firm):        return "Ring 2: Lead with concrete consequences. Make the stakes real."
-        case (.math, .relentless):  return "Ring 2: Hit them with the consequences hard. Make them face the trade-off."
-        case (.mirror, .gentle):    return "Ring 3: Softly remind them of their own words. No guilt."
-        case (.mirror, .firm):      return "Ring 3: Quote their exact words back. Ask directly what changed."
-        case (.mirror, .relentless):return "Ring 3: Throw their own words in their face (respectfully). Don't let them deflect."
-        case (.preview, .gentle):   return "Ring 4: Paint consequences softly. If still no, accept gracefully."
-        case (.preview, .firm):     return "Ring 4: Paint consequences clearly. Last push, then accept."
-        case (.preview, .relentless): return "Ring 4: Paint the worst case vividly. Final shot — make it count."
-        }
-    }
-
-    private func toneGuidelines(_ level: EscalationLevel) -> String {
-        switch level {
-        case .gentle:
-            return """
-            Guidelines:
-            - Warm and supportive above all.
-            - Use their own words gently, not as a weapon.
-            - 1-2 sentences. Brief and soft.
-            - Never guilt-trip. Never pressure.
-            """
-        case .firm:
-            return """
-            Guidelines:
-            - Direct and factual.
-            - Quote their reason directly.
-            - 2-3 sentences max.
-            - Never lecture or be condescending.
-            """
-        case .relentless:
-            return """
-            Guidelines:
-            - Intense and direct. Short sentences. No fluff.
-            - Use their own words as evidence against their excuses.
-            - "You said [X] mattered. Does it or doesn't it?"
-            - 2-3 punchy sentences.
-            - Never cruel — you're intense because you BELIEVE in them.
-            """
-        }
-    }
-
-    // MARK: - Opening Messages
-
-    private func nudgeOpener(label: String, reason: String?, time: String, level: EscalationLevel) -> String {
-        switch level {
-        case .gentle:
-            if let reason { return "Hey — it's \(time). Just a reminder: you said \"\(reason)\" Ready to follow through?" }
-            return "Hey — it's \(time). Your \(label) alarm is going off. What's the plan?"
-        case .firm:
-            if let reason { return "It's \(time). You said: \"\(reason)\" Time to follow through." }
-            return "It's \(time). \(label). Ready?"
-        case .relentless:
-            if let reason { return "\(time). Your words: \"\(reason)\" — Are you going to follow through or not?" }
-            return "\(time). \(label) alarm. What's the plan?"
-        }
-    }
-
-    private func mathOpener(label: String, reason: String?, time: String, level: EscalationLevel, alarm: Alarm) -> String {
-        switch level {
-        case .gentle:     return "Still here? Just checking in. Time's moving, but it's your call."
-        case .firm:       return "Still here. Every minute you wait is a minute you can't get back. What's keeping you?"
-        case .relentless: return "Still here. Every minute past this alarm is a choice against what you said mattered. What are you doing that's worth it?"
-        }
-    }
-
-    private func mirrorOpener(label: String, reason: String?, time: String, level: EscalationLevel) -> String {
-        switch level {
-        case .gentle:
-            if let reason { return "Earlier, you said: \"\(reason)\" — I just want you to remember that. Whatever you decide is okay." }
-            return "You set this alarm for a reason. Just a gentle reminder."
-        case .firm:
-            if let reason { return "This was you, clear-headed, when you set this alarm: \"\(reason)\" — What changed?" }
-            return "You set this alarm for a reason. What changed since then?"
-        case .relentless:
-            if let reason { return "\"\(reason)\" — That was YOU. Not me. So what happened between then and now?" }
-            return "You made a commitment to yourself when you set this alarm. You're breaking it right now. Why?"
-        }
-    }
-
-    private func previewOpener(label: String, reason: String?, time: String, level: EscalationLevel, alarm: Alarm) -> String {
-        switch level {
-        case .gentle:     return "Last check-in. I hope you follow through. See you next time."
-        case .firm:       return "Final call. This is the last ring. Are you following through?"
-        case .relentless: return "This is it. Last ring. You'll either feel good about this moment or you won't. Your call."
-        }
     }
 }

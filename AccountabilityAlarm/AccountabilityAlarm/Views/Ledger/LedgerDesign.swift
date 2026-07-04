@@ -230,16 +230,7 @@ enum L {
         }
     }
 
-    @ViewBuilder
-    static func styleGlyph(_ style: EscalationLevel, size: CGFloat = 10, color: Color) -> some View {
-        switch style {
-        case .gentle:     Leaf(size: size, color: color)
-        case .firm:       Hand(size: size, color: color)
-        case .relentless: Flame(size: size, color: color)
-        }
-    }
-
-    // MARK: - Ring colour helpers
+    // MARK: - Ring colour helpers (legacy — only used by HistoryView analytics)
 
     static func ringColor(_ ring: EscalationRing) -> Color {
         switch ring {
@@ -247,14 +238,6 @@ enum L {
         case .math:    return Palette.ringMath
         case .mirror:  return Palette.ringMirror
         case .preview: return Palette.ringPreview
-        }
-    }
-
-    static func escalationStripeColor(_ level: EscalationLevel) -> Color {
-        switch level {
-        case .gentle:     return Palette.ringNudge
-        case .firm:       return Palette.ringMirror
-        case .relentless: return Palette.ringPreview
         }
     }
 }

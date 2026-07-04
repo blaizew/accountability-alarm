@@ -25,4 +25,18 @@ final class AlarmEvent {
         self.alarm = alarm
         self.firedAt = Date()
     }
+
+    /// The alarm's currently-open wake-up chain, if any.
+    ///
+    /// One AlarmEvent spans the whole chain — first fire through final
+    /// outcome — across every snooze, re-ring, and re-opened conversation.
+    /// Both the conversation and the system Stop intent MUST reuse this
+    /// instead of inserting a fresh event, otherwise `snoozeCount` resets to
+    /// 0 on every re-ring and the LLM's skepticism ladder never engages.
+    static func openChain(for alarm: Alarm) -> AlarmEvent? {
+        let cutoff = Date().addingTimeInterval(-TimeInterval(Constants.chainWindowHours) * 3600)
+        return alarm.events
+            .filter { $0.outcome == "pending" && $0.firedAt > cutoff }
+            .max { $0.firedAt < $1.firedAt }
+    }
 }

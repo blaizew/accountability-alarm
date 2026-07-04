@@ -61,14 +61,14 @@ struct LTitle: View {
     }
 }
 
-enum LTab: String { case alarms, history }
+enum LTab: String { case alarms, history, debug }
 
 struct LTabBar: View {
     @Binding var active: LTab
 
     var body: some View {
         HStack {
-            ForEach([LTab.alarms, LTab.history], id: \.self) { tab in
+            ForEach([LTab.alarms, LTab.history, LTab.debug], id: \.self) { tab in
                 let on = tab == active
                 Button {
                     active = tab

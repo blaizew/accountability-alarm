@@ -30,8 +30,11 @@ struct OpenConversationIntent: LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        await LogService.shared.log(.intent, "OpenConversationIntent fired", alarmId: alarmId)
         if let uuid = UUID(uuidString: alarmId) {
             AlarmRoute.shared.openConversation(alarmId: uuid)
+        } else {
+            await LogService.shared.log(.intent, "OpenConversationIntent: bad alarmId \(alarmId)", isError: true)
         }
         return .result()
     }
@@ -50,6 +53,6 @@ final class AlarmRoute: @unchecked Sendable {
     /// pre-emptive snooze scheduling lives in `ConversationViewModel.setup`,
     /// so all we do here is flip the navigation state.
     func openConversation(alarmId: UUID) {
-        appState?.triggerAlarm(alarmId: alarmId, ring: .nudge)
+        appState?.triggerAlarm(alarmId: alarmId)
     }
 }

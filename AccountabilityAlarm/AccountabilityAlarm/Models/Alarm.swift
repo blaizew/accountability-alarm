@@ -8,13 +8,23 @@ final class Alarm {
     var hour: Int = 22
     var minute: Int = 0
     var repeatDays: [Int] = [] // 1=Sun, 2=Mon, ..., 7=Sat
+    /// Legacy single "Why this matters" field. Kept for backward compat with
+    /// alarms created before the five-box commitment model. On edit, content
+    /// here migrates to `desiredBehavior` if the new fields are empty.
     var reasonText: String = ""
     var reasonAudioPath: String?
+
+    /// Five-box commitment fields. Each is passed verbatim to the LLM along
+    /// with its title so the conversation has rich context for accountability.
+    var desiredBehavior: String = ""
+    var whyWantThis: String = ""
+    var positiveOutcome: String = ""
+    var negativeOutcome: String = ""
+    var longTermImpact: String = ""
     var targetSleepHours: Double?
     var nextMorningEvent: String?
     var nextMorningEventHour: Int?
     var nextMorningEventMinute: Int?
-    var escalationLevelRaw: String = "firm"
     /// When non-nil and in the future, the alarm is currently snoozed and
     /// will re-fire at this date. Cleared (or left stale) once the snooze
     /// notification fires.
@@ -23,18 +33,16 @@ final class Alarm {
     /// this can hold one UUID per scheduled weekday; for one-shot just one.
     /// We store the UUIDs so we can later call `AlarmManager.cancel(id:)`.
     var alarmKitIdStrings: [String] = []
-    /// AlarmKit ID of the currently-pending pre-emptive snooze, if any.
-    /// Cleared on comply/override. Re-set on snooze duration changes.
+    /// AlarmKit ID of the currently-pending snooze, if any. Set by the
+    /// system Stop button (via SnoozeStopIntent) and by the conversation's
+    /// safety-net path. Cleared on comply/override. Re-set on each new
+    /// snooze so we only ever have one pending at a time.
     var pendingSnoozeIdString: String?
-    /// AlarmKit ID of the next-occurrence T+1 companion alarm. T+0 alarms are
-    /// recurring weekly; T+1 companions are one-shot, refreshed each time the
-    /// user interacts with the alarm so they remain individually cancellable.
-    var nextT1IdString: String?
+    /// User-configurable snooze interval, in minutes. Used for the
+    /// conversation's in-app Snooze button default. The system Stop button
+    /// always uses `Constants.stopButtonSnoozeMinutes` (5 min) regardless.
+    var snoozeMinutes: Int = 10
 
-    var escalationLevel: EscalationLevel {
-        get { EscalationLevel(rawValue: escalationLevelRaw) ?? .firm }
-        set { escalationLevelRaw = newValue.rawValue }
-    }
     var enabled: Bool = true
     var createdAt: Date = Date()
 

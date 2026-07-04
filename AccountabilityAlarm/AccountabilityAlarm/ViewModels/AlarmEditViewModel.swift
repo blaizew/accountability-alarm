@@ -9,12 +9,21 @@ final class AlarmEditViewModel {
     var minute = 0
     var repeatDays: Set<Int> = []
     var reasonText = ""
+
+    /// Five-box commitment fields. Each box has its own voice/text input in
+    /// the edit screen and all five (with their titles) get passed to the LLM.
+    var desiredBehavior = ""
+    var whyWantThis = ""
+    var positiveOutcome = ""
+    var negativeOutcome = ""
+    var longTermImpact = ""
+
     var targetSleepHours: Double? = nil
     var nextMorningEvent = ""
     var nextMorningEventHour: Int? = nil
     var nextMorningEventMinute: Int? = nil
     var showSleepSettings = false
-    var escalationLevel: EscalationLevel = .firm
+    var snoozeMinutes: Int = 10
     var isRecording = false
     var reasonAudioPath: String?
     var isTranscribing = false
@@ -58,11 +67,30 @@ final class AlarmEditViewModel {
         minute = alarm.minute
         repeatDays = Set(alarm.repeatDays)
         reasonText = alarm.reasonText
+
+        desiredBehavior = alarm.desiredBehavior
+        whyWantThis = alarm.whyWantThis
+        positiveOutcome = alarm.positiveOutcome
+        negativeOutcome = alarm.negativeOutcome
+        longTermImpact = alarm.longTermImpact
+
+        // Legacy alarms only have reasonText. On first edit, surface it in
+        // the "Desired behavior" box so the user can split it across the
+        // five fields rather than losing it.
+        let hasAnyNew = !desiredBehavior.isEmpty
+            || !whyWantThis.isEmpty
+            || !positiveOutcome.isEmpty
+            || !negativeOutcome.isEmpty
+            || !longTermImpact.isEmpty
+        if !hasAnyNew && !reasonText.isEmpty {
+            desiredBehavior = reasonText
+        }
+
         targetSleepHours = alarm.targetSleepHours
         nextMorningEvent = alarm.nextMorningEvent ?? ""
         nextMorningEventHour = alarm.nextMorningEventHour
         nextMorningEventMinute = alarm.nextMorningEventMinute
-        escalationLevel = alarm.escalationLevel
+        snoozeMinutes = alarm.snoozeMinutes
         reasonAudioPath = alarm.reasonAudioPath
         showSleepSettings = alarm.targetSleepHours != nil || alarm.nextMorningEvent != nil
     }
@@ -81,20 +109,23 @@ final class AlarmEditViewModel {
         alarm.minute = minute
         alarm.repeatDays = repeatDays.sorted()
         alarm.reasonText = reasonText
+        alarm.desiredBehavior = desiredBehavior
+        alarm.whyWantThis = whyWantThis
+        alarm.positiveOutcome = positiveOutcome
+        alarm.negativeOutcome = negativeOutcome
+        alarm.longTermImpact = longTermImpact
         alarm.targetSleepHours = targetSleepHours
         alarm.nextMorningEvent = nextMorningEvent.isEmpty ? nil : nextMorningEvent
         alarm.nextMorningEventHour = nextMorningEventHour
         alarm.nextMorningEventMinute = nextMorningEventMinute
         alarm.reasonAudioPath = reasonAudioPath
-        alarm.escalationLevel = escalationLevel
+        alarm.snoozeMinutes = max(1, min(30, snoozeMinutes))
         alarm.enabled = true
 
         // Schedule with AlarmKit (rings through Silent/DnD/Focus at alarm volume).
         Task { @MainActor in
             let ids = await AlarmKitService.shared.scheduleAlarm(alarm)
             alarm.alarmKitIdStrings = ids.map(\.uuidString)
-            let t1 = await AlarmKitService.shared.scheduleFirstCompanion(for: alarm)
-            alarm.nextT1IdString = t1?.uuidString
         }
     }
 

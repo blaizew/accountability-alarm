@@ -3,13 +3,12 @@ import SwiftData
 
 struct ConversationView: View {
     let alarmId: UUID
-    let initialRing: EscalationRing
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
 
-    @State private var vm: ConversationViewModel
+    @State private var vm = ConversationViewModel()
     @State private var speech = SpeechRecognitionService()
     @State private var tts = TextToSpeechService()
     // AlarmKit owns the ringing now — system UI plays alarm sound at full
@@ -24,15 +23,10 @@ struct ConversationView: View {
 
     enum Mode { case voice, text }
 
-    init(alarmId: UUID, initialRing: EscalationRing) {
+    init(alarmId: UUID) {
         self.alarmId = alarmId
-        self.initialRing = initialRing
-        self._vm = State(initialValue: ConversationViewModel(initialRing: initialRing))
     }
 
-    private var ring: EscalationRing { vm.currentRing }
-    private var ringColor: Color { L.ringColor(ring) }
-    private var ringIndex: Int { ring.rawValue - 1 } // 0..3
     private var elapsedString: String {
         String(format: "%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60)
     }
@@ -45,11 +39,10 @@ struct ConversationView: View {
 
     var body: some View {
         ZStack {
-            backgroundWash.ignoresSafeArea()
+            L.Palette.bg.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 topBar
-                ringMeter
                 if let alarm { alarmHeader(alarm) }
 
                 messagesScroll
@@ -61,89 +54,63 @@ struct ConversationView: View {
         .interactiveDismissDisabled(!vm.isCompleted)
         .onAppear {
             vm.setup(alarmId: alarmId, context: modelContext)
-            Task { _ = await speech.requestPermission() }
+            Task {
+                _ = await speech.requestPermission()
+                // Pre-warm the audio session so the first mic tap captures
+                // without the ~150ms activation delay that would otherwise
+                // truncate the start of speech.
+                speech.prepare()
+            }
             startTimers()
         }
         .onDisappear {
             tts.stop()
-            speech.stopListening()
+            // Unconditional teardown — stopListening() no-ops while a prior
+            // stop is finalizing, which left the record audio session live
+            // after the view was gone.
+            speech.cancelListening()
         }
-        .onChange(of: vm.messages.count) { _, _ in
-            if let last = vm.messages.last, last.role == .assistant, mode == .voice {
+        .onChange(of: vm.messages.count) { _, count in
+            // count > seededMessageCount: never re-speak a message restored
+            // from an earlier conversation in this chain.
+            if count > vm.seededMessageCount,
+               let last = vm.messages.last, last.role == .assistant, mode == .voice {
                 tts.speak(last.content)
             }
         }
-        .animation(.easeOut(duration: 0.3), value: ring)
-    }
-
-    // MARK: - Background
-
-    private var backgroundWash: some View {
-        let washColor: Color = {
-            switch ring {
-            case .preview: return L.Palette.ringPreview.opacity(0.22)
-            case .mirror:  return L.Palette.ringMirror.opacity(0.16)
-            case .math:    return L.Palette.ringMath.opacity(0.10)
-            case .nudge:   return .clear
+        .onChange(of: speech.isListening) { wasListening, isListening in
+            // Recognizer died mid-listen (error or the OS duration limit)
+            // while the user thought they were still recording. Send what
+            // was captured instead of letting the next mic tap wipe it.
+            if wasListening, !isListening, speech.endedUnexpectedly,
+               !speech.transcript.isEmpty, !vm.isCompleted {
+                vm.inputText = speech.transcript
+                Task { @MainActor in
+                    await vm.sendMessage(context: modelContext)
+                }
             }
-        }()
-        return ZStack {
-            L.Palette.bg
-            RadialGradient(
-                colors: [washColor, .clear],
-                center: .top,
-                startRadius: 0,
-                endRadius: 600
-            )
+        }
+        .onChange(of: tts.isSpeaking) { _, isSpeaking in
+            // When TTS finishes, re-prepare the recording session so the
+            // next mic tap is hot. TTS's stop() deactivates the session;
+            // without re-priming, the first tap eats activation latency.
+            if !isSpeaking { speech.prepare() }
         }
     }
 
     // MARK: - Top bar
 
     private var topBar: some View {
-        let leftColor = ring == .preview ? L.Palette.ringPreview : L.Palette.muted
-        let dotColor  = ring == .preview ? L.Palette.ringPreview : L.Palette.fg
-        let offsetMin = ring.minutesAfterAlarm
-        return HStack {
+        HStack {
             HStack(spacing: 5) {
-                L.Dot(size: 5, color: dotColor)
-                Text("ALARM FIRING · +\(offsetMin)m · \(elapsedString)")
-                    .kicker(leftColor)
+                L.Dot(size: 5, color: L.Palette.fg)
+                Text("ALARM FIRING · \(elapsedString)")
+                    .kicker(L.Palette.muted)
             }
             Spacer()
         }
         .padding(.horizontal, L.Space.pageH)
         .padding(.vertical, 8)
-        .overlay(alignment: .bottom) { L.Palette.hair.frame(height: 1) }
-    }
-
-    // MARK: - Ring meter
-
-    private var ringMeter: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 4) {
-                ForEach(EscalationRing.allCases, id: \.self) { r in
-                    let reached = r.rawValue <= ring.rawValue
-                    let current = r == ring
-                    Rectangle()
-                        .fill(reached ? L.ringColor(r) : L.Palette.hair2)
-                        .frame(height: current ? 4 : 2)
-                        .frame(maxWidth: .infinity)
-                        .animation(.easeOut(duration: 0.3), value: ring)
-                }
-            }
-            HStack {
-                HStack(spacing: 6) {
-                    Text("Ring \(ring.rawValue)/4").kicker(L.Palette.fg)
-                    Text("· \(ring.label)").kicker(ringColor)
-                }
-                Spacer()
-                Text(ring.ringDescription).kicker()
-            }
-        }
-        .padding(.horizontal, L.Space.pageH)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
         .overlay(alignment: .bottom) { L.Palette.hair.frame(height: 1) }
     }
 
@@ -178,7 +145,7 @@ struct ConversationView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(vm.messages.enumerated()), id: \.element.id) { idx, msg in
-                        LMessage(message: msg, index: idx + 1, ring: ring)
+                        LMessage(message: msg, index: idx + 1)
                             .id(msg.id)
                     }
                     if vm.isLoading {
@@ -191,6 +158,9 @@ struct ConversationView: View {
                     }
                 }
             }
+            // Start pinned to the newest message — matters when the view
+            // opens with restored history from earlier in the chain.
+            .defaultScrollAnchor(.bottom)
             .onChange(of: vm.messages.count) { _, _ in
                 if let last = vm.messages.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -223,36 +193,38 @@ struct ConversationView: View {
                     .font(L.Mono.font(10.5))
                     .tracking(0.6)
                     .textCase(.uppercase)
-                    .foregroundStyle(L.Palette.muted)
+                    .foregroundStyle(vm.isCompleted ? L.Palette.dim : L.Palette.muted)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                     .overlay(Rectangle().stroke(L.Palette.hair2, lineWidth: 1))
             }
             .buttonStyle(.plain)
+            // A resolved chain must not be re-armed from the still-open view.
+            .disabled(vm.isCompleted)
 
             Button {
-                vm.resolveComply(context: modelContext)
+                vm.resolveAction(context: modelContext)
                 appState.dismissAlarm()
                 dismiss()
             } label: {
-                Text("Comply ↑")
+                Text("Doing It ↑")
                     .font(L.Mono.font(10.5, weight: .semibold))
                     .tracking(0.6)
                     .textCase(.uppercase)
-                    .foregroundStyle(vm.complyAuthorized ? L.Palette.bg : L.Palette.dim)
+                    .foregroundStyle(vm.actionAuthorized ? L.Palette.bg : L.Palette.dim)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(vm.complyAuthorized ? L.Palette.fg : L.Palette.bg3)
+                    .background(vm.actionAuthorized ? L.Palette.fg : L.Palette.bg3)
                     .overlay(
                         Rectangle().stroke(
-                            vm.complyAuthorized ? Color.clear : L.Palette.hair2,
+                            vm.actionAuthorized ? Color.clear : L.Palette.hair2,
                             lineWidth: 1
                         )
                     )
             }
             .buttonStyle(.plain)
-            .disabled(!vm.complyAuthorized)
-            .animation(.easeInOut(duration: 0.15), value: vm.complyAuthorized)
+            .disabled(!vm.actionAuthorized)
+            .animation(.easeInOut(duration: 0.15), value: vm.actionAuthorized)
         }
         .padding(.horizontal, L.Space.pageH)
         .padding(.bottom, 26)
@@ -294,7 +266,7 @@ struct ConversationView: View {
             } label: {
                 ZStack {
                     Circle()
-                        .fill(vm.isCompleted ? L.Palette.bg3 : ringColor)
+                        .fill(vm.isCompleted ? L.Palette.bg3 : L.Palette.fg)
                         .opacity(vm.isCompleted ? 0.5 : 1.0)
                     L.Mic(size: 22, color: L.Palette.bg)
                 }
@@ -306,9 +278,9 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 2) {
                     ForEach(0..<28, id: \.self) { i in
-                        let seed = abs(sin(Double(i) * 2.1 + Double(ring.rawValue)))
+                        let seed = abs(sin(Double(i) * 2.1))
                         Rectangle()
-                            .fill(ringColor)
+                            .fill(L.Palette.fg)
                             .opacity(vm.isCompleted ? 0.15 : 0.25 + seed * 0.6)
                             .frame(maxWidth: .infinity)
                             .frame(height: 3 + CGFloat(seed) * 18)
@@ -371,7 +343,7 @@ struct ConversationView: View {
     // MARK: - Actions
 
     private var canSend: Bool {
-        !vm.inputText.trimmingCharacters(in: .whitespaces).isEmpty && !vm.isLoading
+        !vm.inputText.trimmingCharacters(in: .whitespaces).isEmpty && !vm.isLoading && !vm.isCompleted
     }
 
     private func sendText() {
@@ -383,10 +355,10 @@ struct ConversationView: View {
 
     private func voiceMicTap() {
         if speech.isListening {
-            speech.stopListening()
-            if !speech.transcript.isEmpty {
-                vm.inputText = speech.transcript
-                Task { @MainActor in
+            Task { @MainActor in
+                let transcript = await speech.finishListening()
+                if !transcript.isEmpty {
+                    vm.inputText = transcript
                     await vm.sendMessage(context: modelContext)
                 }
             }
@@ -413,29 +385,17 @@ struct ConversationView: View {
 private struct LMessage: View {
     let message: ConversationMessage
     let index: Int
-    let ring: EscalationRing
 
     private var isAI: Bool { message.role == .assistant }
-
-    private var aiColor: Color { L.ringColor(ring) }
-
-    private var aiWeight: Font.Weight {
-        switch ring {
-        case .nudge:   return .regular
-        case .math:    return .medium
-        case .mirror:  return .semibold
-        case .preview: return .bold
-        }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(isAI ? "> past-self · \(ring.label.lowercased())" : "you")
+                Text(isAI ? "> past-self" : "you")
                     .font(L.Mono.font(9.5))
                     .tracking(0.4)
                     .textCase(.uppercase)
-                    .foregroundStyle(isAI ? aiColor : L.Palette.muted)
+                    .foregroundStyle(isAI ? L.Palette.fg : L.Palette.muted)
                     .lineLimit(1)
                 Spacer()
                 Text(String(format: "%02d", index))
@@ -445,7 +405,7 @@ private struct LMessage: View {
             }
 
             Text(message.content)
-                .font(L.Mono.font(14, weight: isAI ? aiWeight : .regular))
+                .font(L.Mono.font(14))
                 .lineSpacing(4)
                 .foregroundStyle(isAI ? L.Palette.fg : L.Palette.muted)
                 .padding(.leading, isAI ? 0 : 24)

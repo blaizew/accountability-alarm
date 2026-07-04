@@ -14,10 +14,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // the conversation when "Talk to past-self" is tapped from an AlarmKit alert.
         AlarmRoute.shared.appState = appState
         // Start observing AlarmKit's current alarm set. Used by reconcile to
-        // detect orphaned alarms on every app open.
-        Task { @MainActor in
-            AlarmKitService.shared.startObserving()
-        }
+        // detect orphaned alarms on every app open. The observation runs on
+        // a detached background task so the launch path doesn't block.
+        AlarmKitService.shared.startObserving()
+        Task { await LogService.shared.log(.app, "app didFinishLaunching") }
         return true
     }
 
@@ -53,11 +53,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ) async -> UNNotificationPresentationOptions {
         let userInfo = notification.request.content.userInfo
         if let alarmIdString = userInfo["alarmId"] as? String,
-           let alarmId = UUID(uuidString: alarmIdString),
-           let ringRaw = userInfo["ring"] as? Int,
-           let ring = EscalationRing(rawValue: ringRaw) {
+           let alarmId = UUID(uuidString: alarmIdString) {
             await MainActor.run {
-                appState.triggerAlarm(alarmId: alarmId, ring: ring)
+                appState.triggerAlarm(alarmId: alarmId)
             }
             return []
         }
@@ -70,12 +68,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ) async {
         let userInfo = response.notification.request.content.userInfo
         guard let alarmIdString = userInfo["alarmId"] as? String,
-              let alarmId = UUID(uuidString: alarmIdString),
-              let ringRaw = userInfo["ring"] as? Int,
-              let ring = EscalationRing(rawValue: ringRaw) else { return }
+              let alarmId = UUID(uuidString: alarmIdString) else { return }
 
         await MainActor.run {
-            appState.triggerAlarm(alarmId: alarmId, ring: ring)
+            appState.triggerAlarm(alarmId: alarmId)
         }
     }
 }

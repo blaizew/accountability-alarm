@@ -12,15 +12,10 @@ final class AlarmListViewModel {
             if alarm.enabled {
                 let ids = await AlarmKitService.shared.scheduleAlarm(alarm)
                 alarm.alarmKitIdStrings = ids.map(\.uuidString)
-                // Bootstrap the first T+1 companion. From here on it's
-                // refreshed each time the user interacts with the alarm.
-                let t1 = await AlarmKitService.shared.scheduleFirstCompanion(for: alarm)
-                alarm.nextT1IdString = t1?.uuidString
             } else {
                 await AlarmKitService.shared.cancelAlarm(alarm)
                 alarm.alarmKitIdStrings = []
                 alarm.pendingSnoozeIdString = nil
-                alarm.nextT1IdString = nil
             }
         }
     }

@@ -14,6 +14,7 @@ struct MainTabView: View {
                 switch activeTab {
                 case .alarms:  AlarmListView()
                 case .history: HistoryView()
+                case .debug:   LogView()
                 }
             }
             .padding(.bottom, 50) // reserve room for the tab bar
@@ -22,9 +23,8 @@ struct MainTabView: View {
         }
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $appState.showConversation) {
-            if let alarmId = appState.activeAlarmId,
-               let ring = appState.activeRing {
-                ConversationView(alarmId: alarmId, initialRing: ring)
+            if let alarmId = appState.activeAlarmId {
+                ConversationView(alarmId: alarmId)
                     .preferredColorScheme(.dark)
             }
         }

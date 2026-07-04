@@ -14,60 +14,120 @@ final class ConversationViewModel {
     var isLoading = false
     var error: String?
     var isCompleted = false
-    var currentRing: EscalationRing
     var alarmSoundState: AlarmSoundState = .paused
 
-    /// Comply button is greyed out until the LLM calls `authorize_comply`.
-    var complyAuthorized = false
+    /// "DOING IT" button is greyed out until the LLM calls `authorize_action`.
+    /// The LLM only authorizes once the user has given a concrete commitment
+    /// that they're about to perform the action the alarm was set for.
+    /// Authorization only unlocks the button — the chain dies on the tap.
+    var actionAuthorized = false
 
-    /// How many minutes the Snooze button will snooze for. LLM controls via
-    /// `set_snooze_duration`. Defaults to 3.
+    /// How many minutes the Snooze button will snooze for. Seeded from the
+    /// alarm's configured `snoozeMinutes` in setup(); LLM adjusts via
+    /// `set_snooze_duration`.
     var snoozeButtonMinutes = 3
+
+    /// How many of `messages` were restored from the chain's earlier
+    /// conversations (vs. produced in this session). The view uses this to
+    /// avoid re-speaking a restored assistant message via TTS on open.
+    private(set) var seededMessageCount = 0
 
     private let engine = ConversationEngine()
     private var alarm: Alarm?
     private var event: AlarmEvent?
+    /// SwiftUI `.onAppear` can fire multiple times per view presentation
+    /// (system re-creates the view, refresh, etc.) — without this guard,
+    /// setup() would re-run, duplicate the opening message, reset
+    /// `snoozeButtonMinutes` back to the alarm default (wiping any
+    /// LLM-set value), and re-schedule the safety-net snooze.
+    private var didSetup = false
 
     // Parallel API-side conversation log (content blocks for tool round-trips).
     private var apiMessages: [ClaudeAPIService.APIMessage] = []
     private var pendingToolResults: [ClaudeAPIService.ContentBlock] = []
 
-    init(initialRing: EscalationRing) {
-        self.currentRing = initialRing
-    }
+    init() {}
 
     // MARK: - Setup
 
     func setup(alarmId: UUID, context: ModelContext) {
+        guard !didSetup else { return }
+        didSetup = true
+
         let predicate = #Predicate<Alarm> { $0.id == alarmId }
         let descriptor = FetchDescriptor(predicate: predicate)
         guard let alarm = try? context.fetch(descriptor).first else { return }
 
         self.alarm = alarm
+        // Adopt the alarm's configured snooze duration as the conversation's
+        // default for the Snooze button. The LLM can still adjust within this
+        // session via set_snooze_duration.
+        self.snoozeButtonMinutes = alarm.snoozeMinutes
 
-        let event = AlarmEvent(alarm: alarm)
-        context.insert(event)
-        self.event = event
-
-        let opening = engine.openingMessage(alarm: alarm, ring: currentRing)
-        messages.append(.init(role: .assistant, content: opening))
-        apiMessages.append(.init(role: "assistant", text: opening))
+        // Reuse the open wake-up chain if one exists (a prior snooze or the
+        // system Stop button already started it) so snoozeCount carries
+        // across re-rings — the LLM's skepticism ladder keys off it.
+        if let existing = AlarmEvent.openChain(for: alarm) {
+            self.event = existing
+            // Restore the chain's earlier conversation(s) so this session is
+            // a continuation, not a restart: the user sees the prior
+            // back-and-forth, saveConversation appends instead of clobbering
+            // the stored transcript, and the LLM gets the full history to
+            // quote their own words back at them.
+            let prior = existing.conversationLog
+            messages = prior
+            seededMessageCount = prior.count
+            // The transcript rides inside the trigger message rather than as
+            // replayed turns — the stored log doesn't guarantee strict
+            // user/assistant alternation (e.g. a push-back immediately
+            // followed by the snooze sign-off), which the API requires.
+            apiMessages.append(.init(role: "user", text: Self.reFireTrigger(prior: prior)))
+        } else {
+            let event = AlarmEvent(alarm: alarm)
+            context.insert(event)
+            self.event = event
+            // Trigger message — the LLM never shows this to the user. The
+            // system prompt has explicit instructions for handling it:
+            // respond with a specific check-in question grounded in the
+            // user's recorded reason.
+            apiMessages.append(.init(role: "user", text: "[alarm fired]"))
+        }
 
         Task { @MainActor in
-            // The user is interacting, so cancel today's T+1 companion (which
-            // was about to fire / just fired and woke us) and schedule
-            // tomorrow's T+1 in its place. This keeps T+1 companions as
-            // individually-cancellable one-shots per occurrence.
-            let nextT1 = await AlarmKitService.shared.refreshNextCompanion(for: alarm)
-            alarm.nextT1IdString = nextT1?.uuidString
-            try? context.save()
+            await LogService.shared.log(
+                .conversation,
+                "conversation opened (restored \(seededMessageCount) prior messages, snoozeCount=\(event?.snoozeCount ?? 0))",
+                alarmId: alarm.id.uuidString
+            )
 
-            // Pre-emptive snooze safety net for the "user opened the
-            // conversation but closed the app without resolving" path.
-            // Fires after 1 minute. Distinct from the next-instance T+1
-            // companion and from the user-facing Snooze button.
-            await rescheduleSnooze(context: context, minutes: 1)
+            // Silence any actively-ringing alarm sound. Under normal
+            // conditions tapping "Talk to past-self" dismisses the alarm
+            // UI/sound automatically; under Downtime collision it doesn't,
+            // and the alarm keeps ringing until we explicitly stop it.
+            await AlarmKitService.shared.stopAllActive(alarm)
+
+            // Pre-emptive safety net for the "opened conversation but closed
+            // the app without resolving" path. 5-minute cadence — the same
+            // as the system Stop button — so the user can't accidentally
+            // escape the alarm by backgrounding the app.
+            await rescheduleSnooze(context: context, minutes: Constants.conversationSafetyNetMinutes)
+
+            // Ask the LLM to generate the opening check-in. Personalized to
+            // the user's recorded reason, framed as a concrete question.
+            await runAssistantTurn(context: context)
         }
+    }
+
+    /// Trigger message for a re-ring within an open chain. Carries the
+    /// chain's transcript so the LLM can reference what the user actually
+    /// said before snoozing ("at 7:05 you said five more minutes").
+    private static func reFireTrigger(prior: [ConversationMessage]) -> String {
+        guard !prior.isEmpty else { return "[alarm fired]" }
+        var lines = ["[alarm re-fired after snooze]", "", "Transcript from earlier in this wake-up chain:"]
+        for m in prior {
+            lines.append("\(m.role == .assistant ? "PAST-SELF" : "USER"): \(m.content)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - User-driven turn
@@ -75,6 +135,12 @@ final class ConversationViewModel {
     func sendMessage(context: ModelContext) async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+
+        await LogService.shared.log(
+            .conversation,
+            "user: \(text.count > 200 ? String(text.prefix(200)) + "…" : text)",
+            alarmId: alarm?.id.uuidString
+        )
 
         let uiMessage = ConversationMessage(role: .user, content: text)
         messages.append(uiMessage)
@@ -102,13 +168,15 @@ final class ConversationViewModel {
 
     // MARK: - Explicit outcome resolutions (UI buttons; bypass the LLM)
 
-    func resolveComply(context: ModelContext) {
-        guard complyAuthorized else { return }
+    func resolveAction(context: ModelContext) {
+        guard actionAuthorized else { return }
         handleCompliance(context: context)
     }
 
     func resolveSnooze(context: ModelContext, minutes: Int? = nil) {
-        guard let alarm else { return }
+        // A resolved chain (complied/overridden) must never be re-armed —
+        // that would re-ring an alarm the ledger already credited.
+        guard let alarm, !isCompleted else { return }
         let n = minutes ?? snoozeButtonMinutes
         Task { @MainActor in
             await rescheduleSnooze(context: context, minutes: n)
@@ -131,12 +199,33 @@ final class ConversationViewModel {
     /// Single source of truth for "this alarm should re-ring in N minutes."
     private func rescheduleSnooze(context: ModelContext, minutes: Int) async {
         guard let alarm else { return }
-        if let s = alarm.pendingSnoozeIdString, let oldId = UUID(uuidString: s) {
+
+        let priorId = alarm.pendingSnoozeIdString
+        await LogService.shared.log(
+            .conversation,
+            "rescheduleSnooze: minutes=\(minutes) priorId=\(priorId?.prefix(8).description ?? "nil")",
+            alarmId: alarm.id.uuidString
+        )
+
+        if let s = priorId, let oldId = UUID(uuidString: s) {
             await AlarmKitService.shared.cancel(alarmKitId: oldId)
         }
         if let newId = await AlarmKitService.shared.scheduleSnooze(alarm: alarm, minutes: minutes) {
             alarm.pendingSnoozeIdString = newId.uuidString
             alarm.snoozedUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+            await LogService.shared.log(
+                .conversation,
+                "rescheduleSnooze: scheduled newId=\(newId.uuidString.prefix(8)) fires=\(Int(minutes * 60))s",
+                alarmId: alarm.id.uuidString,
+                alarmKitId: newId.uuidString
+            )
+        } else {
+            await LogService.shared.log(
+                .conversation,
+                "rescheduleSnooze: scheduleSnooze returned nil",
+                alarmId: alarm.id.uuidString,
+                isError: true
+            )
         }
         try? context.save()
     }
@@ -145,7 +234,13 @@ final class ConversationViewModel {
     /// Used on comply/override.
     private func cancelPendingSnooze(context: ModelContext) async {
         guard let alarm else { return }
-        if let s = alarm.pendingSnoozeIdString, let id = UUID(uuidString: s) {
+        let priorId = alarm.pendingSnoozeIdString
+        await LogService.shared.log(
+            .conversation,
+            "cancelPendingSnooze: priorId=\(priorId?.prefix(8).description ?? "nil")",
+            alarmId: alarm.id.uuidString
+        )
+        if let s = priorId, let id = UUID(uuidString: s) {
             await AlarmKitService.shared.cancel(alarmKitId: id)
         }
         alarm.pendingSnoozeIdString = nil
@@ -161,7 +256,9 @@ final class ConversationViewModel {
         error = nil
 
         let systemPrompt = engine.buildSystemPrompt(
-            alarm: alarm, ring: currentRing, event: event
+            alarm: alarm,
+            event: event,
+            snoozeButtonMinutes: snoozeButtonMinutes
         )
 
         do {
@@ -183,7 +280,20 @@ final class ConversationViewModel {
             }
 
             if !response.text.isEmpty {
+                await LogService.shared.log(
+                    .conversation,
+                    "assistant: \(response.text.count > 200 ? String(response.text.prefix(200)) + "…" : response.text)",
+                    alarmId: alarm.id.uuidString
+                )
                 messages.append(.init(role: .assistant, content: response.text))
+            }
+            if !response.toolUses.isEmpty {
+                let toolNames = response.toolUses.map(\.name).joined(separator: ", ")
+                await LogService.shared.log(
+                    .conversation,
+                    "assistant tools: \(toolNames)",
+                    alarmId: alarm.id.uuidString
+                )
             }
 
             for tool in response.toolUses {
@@ -192,6 +302,12 @@ final class ConversationViewModel {
 
         } catch {
             self.error = error.localizedDescription
+            await LogService.shared.log(
+                .conversation,
+                "api error: \(error.localizedDescription)",
+                alarmId: alarm.id.uuidString,
+                isError: true
+            )
             messages.append(.init(
                 role: .assistant,
                 content: "I'm having trouble connecting. But remember why you set this alarm. Are you going to listen to past-you?"
@@ -205,27 +321,54 @@ final class ConversationViewModel {
     // MARK: - Tool dispatch
 
     private func dispatch(tool: ClaudeAPIService.ToolUse, context: ModelContext) async {
+        let inputJSON = encodeForLog(tool.input)
+        await LogService.shared.log(
+            .conversation,
+            "tool: \(tool.name) input=\(inputJSON)",
+            alarmId: alarm?.id.uuidString
+        )
+
         switch tool.name {
 
-        case "authorize_comply":
-            complyAuthorized = true
-            queueToolResult(id: tool.id, content: "Comply button enabled. Awaiting user tap.")
+        case "authorize_action":
+            actionAuthorized = true
+            await LogService.shared.log(.conversation, "authorize_action: DOING IT unlocked", alarmId: alarm?.id.uuidString)
+            // Two-step compliance: authorization only unlocks the DOING IT
+            // button. The chain dies when the user physically taps it
+            // (resolveAction → handleCompliance). A half-asleep "feet on
+            // the floor" typed from bed can't kill the alarm on its own —
+            // the tap is the cheap-but-real physical confirmation. If the
+            // user keeps snoozing instead of tapping, the safety-net snooze
+            // keeps the chain alive.
+            queueToolResult(id: tool.id, content: "DOING IT button unlocked. The alarm chain stops only when the user taps it — if they keep talking instead of tapping, they haven't followed through yet.")
 
         case "set_snooze_duration":
-            let minutes = tool.input["minutes"]?.int ?? 3
-            snoozeButtonMinutes = max(1, min(30, minutes))
+            let requested = tool.input["minutes"]?.int ?? 3
+            let before = snoozeButtonMinutes
+            snoozeButtonMinutes = max(1, min(30, requested))
+            await LogService.shared.log(
+                .conversation,
+                "set_snooze_duration: requested=\(requested) before=\(before) after=\(snoozeButtonMinutes)",
+                alarmId: alarm?.id.uuidString
+            )
             // Only changes the user-facing Snooze button. The pre-emptive
-            // 1-min "you didn't engage" timer is separate and not affected.
+            // safety-net "you didn't engage" timer is separate and not affected.
             queueToolResult(id: tool.id, content: "Snooze button set to \(snoozeButtonMinutes) minutes.")
 
         case "mark_overridden":
             let reason = tool.input["reason"]?.string ?? "(no reason)"
+            await LogService.shared.log(.conversation, "mark_overridden: \(reason)", alarmId: alarm?.id.uuidString)
             queueToolResult(id: tool.id, content: "Logged as overridden.")
             await cancelPendingSnooze(context: context)
             handleOverride(reason: reason, context: context)
 
         case "snooze_alarm":
-            let minutes = tool.input["minutes"]?.int ?? 3
+            guard !isCompleted else {
+                queueToolResult(id: tool.id, content: "Alarm already resolved — no snooze scheduled.", isError: true)
+                break
+            }
+            let minutes = tool.input["minutes"]?.int ?? snoozeButtonMinutes
+            await LogService.shared.log(.conversation, "snooze_alarm: \(minutes) min", alarmId: alarm?.id.uuidString)
             await rescheduleSnooze(context: context, minutes: minutes)
             event?.snoozeCount += 1
             alarmSoundState = .stopped
@@ -233,30 +376,28 @@ final class ConversationViewModel {
             isCompleted = true
             saveConversation(context: context)
 
-        case "escalate_ring":
-            if let next = nextRing(after: currentRing) {
-                currentRing = next
-                queueToolResult(id: tool.id, content: "Escalated to ring: \(next.label).")
-            } else {
-                queueToolResult(id: tool.id, content: "Already at preview ring. No further escalation.", isError: true)
-            }
-
         default:
+            await LogService.shared.log(.conversation, "unknown tool: \(tool.name)", alarmId: alarm?.id.uuidString, isError: true)
             queueToolResult(id: tool.id, content: "Unknown tool.", isError: true)
         }
     }
 
-    private func queueToolResult(id: String, content: String, isError: Bool = false) {
-        pendingToolResults.append(.toolResult(id: id, content: content, isError: isError))
+    /// Serialize a tool input JSONValue to a compact string for the log. Keeps
+    /// the log scannable while still preserving the actual parameters the
+    /// LLM passed.
+    private func encodeForLog(_ value: JSONValue) -> String {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(value),
+              let str = String(data: data, encoding: .utf8) else {
+            return "<unencodable>"
+        }
+        // Cap at 200 chars so a runaway prompt doesn't blow up the log row.
+        if str.count > 200 { return String(str.prefix(200)) + "…" }
+        return str
     }
 
-    private func nextRing(after ring: EscalationRing) -> EscalationRing? {
-        switch ring {
-        case .nudge:   return .math
-        case .math:    return .mirror
-        case .mirror:  return .preview
-        case .preview: return nil
-        }
+    private func queueToolResult(id: String, content: String, isError: Bool = false) {
+        pendingToolResults.append(.toolResult(id: id, content: content, isError: isError))
     }
 
     // MARK: - Outcome handlers
@@ -266,11 +407,15 @@ final class ConversationViewModel {
         alarmSoundState = .stopped
         isCompleted = true
 
-        event?.outcome = "complied"
+        // A chain that took snoozes before complying is the ledger's yellow
+        // "snoozed then complied" — distinct from a clean first-ring comply.
+        event?.outcome = (event?.snoozeCount ?? 0) > 0 ? "snoozed_then_complied" : "complied"
         event?.complianceTimeMinutes = minutesSinceStart()
         saveConversation(context: context)
 
         Task { @MainActor in
+            await LogService.shared.log(.conversation, "comply", alarmId: alarm?.id.uuidString)
+            if let alarm { await AlarmKitService.shared.stopAllActive(alarm) }
             await cancelPendingSnooze(context: context)
         }
     }
@@ -286,6 +431,8 @@ final class ConversationViewModel {
         saveConversation(context: context)
 
         Task { @MainActor in
+            await LogService.shared.log(.conversation, "override: \(reason)", alarmId: alarm?.id.uuidString)
+            if let alarm { await AlarmKitService.shared.stopAllActive(alarm) }
             await cancelPendingSnooze(context: context)
         }
     }

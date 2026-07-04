@@ -12,6 +12,8 @@ struct AlarmListView: View {
     @State private var alarmToEdit: Alarm?
     @State private var showNew = false
     @State private var now: String = AlarmListView.currentClock()
+    @State private var showDowntimeNotice = false
+    @AppStorage(Constants.downtimeNoticeAcknowledgedKey) private var downtimeAcknowledged = false
 
     private let clockTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -22,6 +24,10 @@ struct AlarmListView: View {
                 right: now,
                 rightColor: L.Palette.muted
             )
+
+            if !downtimeAcknowledged {
+                DowntimeNoticeBanner { showDowntimeNotice = true }
+            }
 
             // Using List (not ScrollView) so .swipeActions work natively —
             // pull-left to reveal trash, full-swipe to delete.
@@ -81,6 +87,18 @@ struct AlarmListView: View {
         .onReceive(clockTimer) { _ in now = Self.currentClock() }
         .task {
             await viewModel.requestNotificationPermission()
+            // First-run: show the Downtime caveat modal once. User can also
+            // re-open it later via the persistent banner.
+            if !downtimeAcknowledged {
+                showDowntimeNotice = true
+            }
+        }
+        .fullScreenCover(isPresented: $showDowntimeNotice) {
+            DowntimeNoticeView(onDismiss: {
+                downtimeAcknowledged = true
+                showDowntimeNotice = false
+            })
+            .preferredColorScheme(.dark)
         }
     }
 
@@ -124,8 +142,8 @@ struct AlarmListView: View {
     }
 
     private func fireAlarm(_ alarm: Alarm) {
-        // Dev affordance: opens the Conversation in nudge ring.
-        appState.triggerAlarm(alarmId: alarm.id, ring: .nudge)
+        // Dev affordance: opens the Conversation.
+        appState.triggerAlarm(alarmId: alarm.id)
     }
 
     static func currentClock() -> String {
@@ -144,7 +162,7 @@ struct LAlarmRow: View {
     let onEdit: () -> Void
     let onToggle: () -> Void
 
-    private var stripeColor: Color { L.escalationStripeColor(alarm.escalationLevel) }
+    private var stripeColor: Color { L.Palette.fg }
 
     private var outcomeColor: Color {
         switch alarm.lastOutcome {
@@ -202,11 +220,6 @@ struct LAlarmRow: View {
                 Text("#\(String(format: "%03d", index + 1))")
                     .kicker(L.Palette.muted)
                 Text(alarm.daysLabel).kicker()
-                HStack(spacing: 4) {
-                    L.styleGlyph(alarm.escalationLevel, size: 9, color: stripeColor)
-                    Text(alarm.escalationLevel.label.lowercased())
-                        .kicker(stripeColor)
-                }
             }
             .lineLimit(1)
             .layoutPriority(0)

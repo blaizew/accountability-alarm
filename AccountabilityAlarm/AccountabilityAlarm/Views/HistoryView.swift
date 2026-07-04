@@ -317,6 +317,9 @@ struct HistoryView: View {
     }
 
     private func humanOutcome(_ raw: String) -> String {
-        raw.replacingOccurrences(of: "_", with: " ")
+        // "ignored" is stored for never-engaged/abandoned firings; the
+        // user-facing word (and the pattern-grid legend) is "missed".
+        if raw == "ignored" { return "missed" }
+        return raw.replacingOccurrences(of: "_", with: " ")
     }
 }
