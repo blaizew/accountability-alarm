@@ -32,6 +32,12 @@ final class ConversationViewModel {
     /// avoid re-speaking a restored assistant message via TTS on open.
     private(set) var seededMessageCount = 0
 
+    /// Set when the session completes without a user tap (LLM-driven
+    /// snooze). The view auto-dismisses the cover — a completed
+    /// conversation left presented blocks the next re-ring's trigger from
+    /// presenting a fresh one.
+    private(set) var autoDismissOnCompletion = false
+
     private let engine = ConversationEngine()
     private var alarm: Alarm?
     private var event: AlarmEvent?
@@ -373,6 +379,7 @@ final class ConversationViewModel {
             event?.snoozeCount += 1
             alarmSoundState = .stopped
             queueToolResult(id: tool.id, content: "Snoozed for \(minutes) minutes.")
+            autoDismissOnCompletion = true
             isCompleted = true
             saveConversation(context: context)
 

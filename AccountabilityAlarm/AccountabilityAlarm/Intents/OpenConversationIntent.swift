@@ -1,6 +1,7 @@
 import AppIntents
 import Foundation
 import ActivityKit
+import SwiftData
 
 /// App Intent fired when the user taps the "Talk to past-self" button on
 /// the AlarmKit alarm UI. It opens the app and routes into the conversation
@@ -32,6 +33,20 @@ struct OpenConversationIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         await LogService.shared.log(.intent, "OpenConversationIntent fired", alarmId: alarmId)
         if let uuid = UUID(uuidString: alarmId) {
+            // Silence the ringer HERE, before any UI routing. The
+            // conversation's setup() also stops it, but if presentation is
+            // wedged (stale cover, broken scene state) setup never runs —
+            // and the user is left with a ringing phone and no Stop button
+            // (the reboot-to-silence incident, 2026-07-04).
+            if let container = AppContainer.shared {
+                let context = container.mainContext
+                let predicate = #Predicate<Alarm> { $0.id == uuid }
+                if let alarm = try? context.fetch(FetchDescriptor(predicate: predicate)).first {
+                    await AlarmKitService.shared.stopAllActive(alarm)
+                } else {
+                    await AlarmKitService.shared.stopAnyAlerting()
+                }
+            }
             AlarmRoute.shared.openConversation(alarmId: uuid)
         } else {
             await LogService.shared.log(.intent, "OpenConversationIntent: bad alarmId \(alarmId)", isError: true)

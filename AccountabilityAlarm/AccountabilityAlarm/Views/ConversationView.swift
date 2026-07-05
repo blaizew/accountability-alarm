@@ -90,6 +90,17 @@ struct ConversationView: View {
                 }
             }
         }
+        .onChange(of: vm.isCompleted) { _, done in
+            // LLM-driven snooze ends the session with no user tap. Close the
+            // cover (after letting the sign-off land) so a stale completed
+            // conversation can't block the next re-ring from presenting.
+            guard done, vm.autoDismissOnCompletion else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                appState.dismissAlarm()
+                dismiss()
+            }
+        }
         .onChange(of: tts.isSpeaking) { _, isSpeaking in
             // When TTS finishes, re-prepare the recording session so the
             // next mic tap is hot. TTS's stop() deactivates the session;

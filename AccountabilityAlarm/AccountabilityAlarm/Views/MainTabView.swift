@@ -22,11 +22,13 @@ struct MainTabView: View {
             LTabBar(active: $activeTab)
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(isPresented: $appState.showConversation) {
-            if let alarmId = appState.activeAlarmId {
-                ConversationView(alarmId: alarmId)
-                    .preferredColorScheme(.dark)
-            }
+        .fullScreenCover(item: $appState.activeSession) { session in
+            // .id(session.id): a re-trigger while a conversation is already
+            // presented must rebuild the view (fresh view model, fresh
+            // setup(), alarm silenced) rather than reuse the stale one.
+            ConversationView(alarmId: session.alarmId)
+                .id(session.id)
+                .preferredColorScheme(.dark)
         }
     }
 }

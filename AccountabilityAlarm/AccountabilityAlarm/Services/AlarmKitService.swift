@@ -206,6 +206,21 @@ final class AlarmKitService {
         if let s = alarm.pendingSnoozeIdString, let id = UUID(uuidString: s) {
             await stop(alarmKitId: id)
         }
+        await stopAnyAlerting()
+    }
+
+    /// Stop every alarm AlarmKit reports as actively alerting. Every alarm
+    /// in the manager's list belongs to this app, so this is always safe —
+    /// and it's the only way to silence a ringer whose ID we lost track of
+    /// (orphans from older builds, clobbered pendingSnooze records). A
+    /// ringing phone with no working Stop affordance forces the user to
+    /// reboot; this sweep is the backstop against that.
+    func stopAnyAlerting() async {
+        guard let live = try? manager.alarms else { return }
+        for a in live where a.state == .alerting {
+            await LogService.shared.log(.alarmkit, "stopAnyAlerting: stopping alerting \(a.id.uuidString.prefix(8))", alarmKitId: a.id.uuidString)
+            await stop(alarmKitId: a.id)
+        }
     }
 
     // MARK: - Reconciliation
@@ -274,6 +289,10 @@ final class AlarmKitService {
 
         await recordMissedFirings(alarms: alarms, context: context)
         await closeAbandonedChains(context: context)
+
+        // A ghost ringer (alerting alarm nobody can stop) should die the
+        // moment the app is opened, whatever else is going on.
+        await stopAnyAlerting()
     }
 
     /// A firing counts as engaged if ANY AlarmEvent exists near the due time
