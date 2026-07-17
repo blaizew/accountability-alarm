@@ -155,7 +155,7 @@ final class AlarmKitService {
         let attributes = AlarmAttributes<Metadata>(
             presentation: AlarmPresentation(alert: alertContent(for: alarm, isSnooze: isSnooze)),
             metadata: Metadata(),
-            tintColor: Color.orange
+            tintColor: L.Palette.accent
         )
         let config: AlarmManager.AlarmConfiguration<Metadata> = .init(
             schedule: schedule,

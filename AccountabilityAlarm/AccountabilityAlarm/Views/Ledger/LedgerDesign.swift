@@ -1,44 +1,46 @@
 import SwiftUI
 
 // LEDGER design tokens — dense, monospace, terminal-influenced.
-// Mirrors `ledger-shared.jsx` from the design handoff.
+// Palette re-themed to the cbt-i-coach amber night scheme; it no longer mirrors
+// `ledger-shared.jsx` colors. Typography and spacing still do.
 
 enum L {
 
     // MARK: - Palette
 
     enum Palette {
-        // Backgrounds
-        static let bg  = Color(hex: 0x0A0A0C)
-        static let bg2 = Color(hex: 0x121216)
-        static let bg3 = Color(hex: 0x18181D)
-        static let bg4 = Color(hex: 0x1E1E25)
+        // Backgrounds - cbt-i-coach night ramp, warm hue 45.
+        static let bg  = Color(hex: 0x140B07) // oklch(0.160 0.018 45)
+        static let bg2 = Color(hex: 0x1F1410) // oklch(0.205 0.020 45)
+        static let bg3 = Color(hex: 0x271B16) // oklch(0.235 0.021 45)
+        static let bg4 = Color(hex: 0x2F221C) // oklch(0.265 0.023 45)
 
-        // Hairlines
-        static let hair  = Color.white.opacity(0.06)
-        static let hair2 = Color.white.opacity(0.12)
-        static let hair3 = Color.white.opacity(0.18)
+        // Hairlines - warm tint rather than neutral white.
+        static let hair  = Color(hex: 0xD9BFA6, opacity: 0.06)
+        static let hair2 = Color(hex: 0xD9BFA6, opacity: 0.12)
+        static let hair3 = Color(hex: 0xD9BFA6, opacity: 0.18)
 
-        // Text
-        static let fg     = Color(hex: 0xE9E9EC)
-        static let muted  = Color(hex: 0xE8E8EC, opacity: 0.58)
-        static let dim    = Color(hex: 0xE8E8EC, opacity: 0.36)
-        static let dimmer = Color(hex: 0xE8E8EC, opacity: 0.22)
+        // Text - cbt-i-coach night ramp.
+        static let fg     = Color(hex: 0xD9BFA6) // oklch(0.820 0.045 65)
+        static let muted  = Color(hex: 0x99816E) // oklch(0.620 0.040 60)
+        static let dim    = Color(hex: 0x69574B) // oklch(0.470 0.030 55)
+        static let dimmer = Color(hex: 0x4E3F36) // oklch(0.380 0.025 52)
 
-        static let accent = Color.white
+        static let accent = Color(hex: 0xCF7D44) // cbt-i-coach night accent
 
-        // Ring colours — approximated from oklch in the brief.
-        // oklch(0.74 0.08 240) cool blue
-        static let ringNudge   = Color(red: 0.50, green: 0.71, blue: 0.84)
-        // oklch(0.78 0.07 90) straw
-        static let ringMath    = Color(red: 0.83, green: 0.76, blue: 0.51)
+        // Ring colours - escalation ramp. Hue stays warm (30-70); intensity is
+        // carried by climbing chroma, so no stage emits blue light at night.
+        // oklch(0.70 0.03 60) faint warm
+        static let ringNudge   = Color(hex: 0xAD9A8C)
+        // oklch(0.74 0.08 70) straw
+        static let ringMath    = Color(hex: 0xCCA273)
         // oklch(0.72 0.13 55) amber
-        static let ringMirror  = Color(red: 0.93, green: 0.65, blue: 0.36)
-        // oklch(0.65 0.18 28) red
-        static let ringPreview = Color(red: 0.91, green: 0.40, blue: 0.32)
+        static let ringMirror  = Color(hex: 0xE28D4F)
+        // oklch(0.65 0.18 30) ember red
+        static let ringPreview = Color(hex: 0xE85A48)
 
-        static let goodGreen  = Color(red: 0.45, green: 0.79, blue: 0.55) // oklch(0.72 0.12 145)
-        static let warnYellow = Color(red: 0.86, green: 0.72, blue: 0.36) // oklch(0.78 0.13 88)
+        static let goodGreen  = Color(hex: 0x94A676) // oklch(0.70 0.07 125)
+        static let warnYellow = Color(hex: 0xD9A850) // oklch(0.76 0.12 80)
         static let badRed     = ringPreview
     }
 

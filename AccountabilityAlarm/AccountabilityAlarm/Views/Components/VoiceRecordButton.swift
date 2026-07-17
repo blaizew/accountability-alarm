@@ -20,19 +20,19 @@ struct VoiceRecordButton: View {
                     systemImage: recorder.isRecording ? "stop.circle.fill" : "mic.circle.fill"
                 )
                 .font(.headline)
-                .foregroundStyle(recorder.isRecording ? .red : .accentColor)
+                .foregroundStyle(recorder.isRecording ? L.Palette.badRed : L.Palette.accent)
             }
 
             if recorder.isRecording {
                 Text("Recording...")
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(L.Palette.badRed)
             }
 
             if let error = recorder.error {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(L.Palette.badRed)
             }
         }
     }
