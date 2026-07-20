@@ -10,12 +10,12 @@ import SwiftData
 /// Behavior: schedules a fresh 5-minute snooze for this alarm, cancelling any
 /// existing pending snooze. Net effect: the alarm sound stops (system handles
 /// that as part of Stop), and the alarm re-rings 5 minutes later. The only
-/// way out of the cycle is for the user to actually engage via "Talk to
-/// past-self" and have the LLM authorize Comply.
+/// way out of the cycle is for the user to actually engage via "Talk to Coach"
+/// and have the LLM authorize Comply.
 struct SnoozeStopIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Snooze"
     static var description = IntentDescription(
-        "Snoozes the alarm for 5 minutes. The only way to truly stop the alarm is to engage with past-you."
+        "Snoozes the alarm for 5 minutes. The only way to truly stop the alarm is to engage with your Coach."
     )
 
     @Parameter(title: "Alarm ID")

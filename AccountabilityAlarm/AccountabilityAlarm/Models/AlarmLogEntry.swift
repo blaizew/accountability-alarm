@@ -38,7 +38,7 @@ final class AlarmLogEntry {
 
 enum LogCategory: String, CaseIterable {
     case alarmkit   // schedule/cancel/stop calls into AlarmKit
-    case intent     // App Intent invocations (Stop, Talk to past-self)
+    case intent     // App Intent invocations (Stop, Talk to Coach)
     case conversation // conversation lifecycle (open, comply, override, snooze)
     case app        // launch, reconcile, scene-phase
     case error      // anything explicitly flagged

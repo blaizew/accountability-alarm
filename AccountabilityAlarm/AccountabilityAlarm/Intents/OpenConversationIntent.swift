@@ -3,7 +3,7 @@ import Foundation
 import ActivityKit
 import SwiftData
 
-/// App Intent fired when the user taps the "Talk to past-self" button on
+/// App Intent fired when the user taps the "Talk to Coach" button on
 /// the AlarmKit alarm UI. It opens the app and routes into the conversation
 /// for the alarm whose UUID is carried in the intent.
 ///
@@ -12,9 +12,9 @@ import SwiftData
 /// returns, `AppState.activeAlarmId` has been set and `MainTabView` will
 /// present the fullScreenCover with the conversation.
 struct OpenConversationIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "Talk to past-self"
+    static var title: LocalizedStringResource = "Talk to Coach"
     static var description = IntentDescription(
-        "Opens the accountability conversation for an alarm so you can argue with past-you."
+        "Opens the accountability conversation for an alarm so you can argue with your Coach."
     )
 
     /// AlarmKit only persists string-shaped intent parameters reliably across

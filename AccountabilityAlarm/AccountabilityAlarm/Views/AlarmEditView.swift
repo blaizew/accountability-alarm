@@ -218,7 +218,7 @@ struct AlarmEditView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("// how long past-self snoozes when you ask. slide-to-stop on the alarm is fixed at 5 min.")
+            Text("// how long coach snoozes when you ask. slide-to-stop on the alarm is fixed at 5 min.")
                 .kicker()
         }
         .padding(.horizontal, L.Space.pageH)

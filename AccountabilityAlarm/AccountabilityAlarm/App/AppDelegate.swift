@@ -11,7 +11,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         UNUserNotificationCenter.current().delegate = self
         registerNotificationCategories()
         // Wire the App Intent bridge so OpenConversationIntent can route into
-        // the conversation when "Talk to past-self" is tapped from an AlarmKit alert.
+        // the conversation when "Talk to Coach" is tapped from an AlarmKit alert.
         AlarmRoute.shared.appState = appState
         // Start observing AlarmKit's current alarm set. Used by reconcile to
         // detect orphaned alarms on every app open. The observation runs on

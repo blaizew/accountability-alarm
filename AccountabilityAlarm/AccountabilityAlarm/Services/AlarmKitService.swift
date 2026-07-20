@@ -13,7 +13,7 @@ private typealias AKAlarm = AlarmKit.Alarm
 /// Each Alarm in our model is backed by one (or one-per-weekday) AlarmKit
 /// alarm. When the alarm fires, the system shows a full-screen alert with two
 /// buttons:
-///   • "Talk to past-self" — secondaryIntent runs `OpenConversationIntent`,
+///   • "Talk to Coach" — secondaryIntent runs `OpenConversationIntent`,
 ///     which launches the app and opens the conversation. This path requires
 ///     the app to launch, so it doesn't work under Screen Time Downtime.
 ///   • "Slide to Stop" — stopIntent runs `SnoozeStopIntent`, which schedules
@@ -409,7 +409,7 @@ final class AlarmKitService {
         )
 
         let talkButton = AlarmButton(
-            text: "Talk to past-self",
+            text: "Talk to Coach",
             textColor: .white,
             systemImageName: "bubble.left.and.bubble.right"
         )

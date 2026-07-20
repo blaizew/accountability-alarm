@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// First-run modal explaining the Screen Time Downtime caveat. iOS doesn't
-/// automatically add AlarmKit apps to Downtime's "Always Allowed" list, so
+/// automatically add AlarmKit apps to Screen Time's "Always Allowed" list, so
 /// alarms that collide with the user's Downtime start time will leave the
-/// "Talk to past-self" button unresponsive (the app is blocked from
+/// "Talk to Coach" button unresponsive (the app is blocked from
 /// launching). The Slide-to-Stop snooze still works because it runs in a
 /// background intent — but the conversation flow won't reach them.
 ///
@@ -19,13 +19,13 @@ struct DowntimeNoticeView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("// one-time setup").kicker()
 
-                Text("Add this app to your Downtime Always Allowed list")
+                Text("Add this app to your Screen Time Always Allowed list")
                     .font(L.Mono.font(22, weight: .medium))
                     .tracking(-0.3)
                     .foregroundStyle(L.Palette.fg)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("If you use iOS Downtime (or Sleep Focus auto-enables it), this app gets restricted when Downtime starts — same as any other app. The alarm sound will still ring, but the \"Talk to past-self\" button can't open the app, so you can't engage with the conversation.")
+                Text("If you use iOS Downtime (or Sleep Focus auto-enables it), this app gets restricted when Downtime starts — same as any other app. The alarm sound will still ring, but the \"Talk to Coach\" button can't open the app, so you can't engage with the conversation.")
                     .font(L.Mono.font(13))
                     .foregroundStyle(L.Palette.muted)
                     .lineSpacing(3)
@@ -53,9 +53,8 @@ struct DowntimeNoticeView: View {
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 10) {
-            stepRow(num: "01", text: "Open Settings → Screen Time → Downtime")
-            stepRow(num: "02", text: "Tap \"Always Allowed\"")
-            stepRow(num: "03", text: "Tap the + next to AccountabilityAlarm")
+            stepRow(num: "01", text: "Open Settings → Screen Time → Always Allowed")
+            stepRow(num: "02", text: "Tap the + next to AccountabilityAlarm")
         }
         .padding(.top, 6)
     }

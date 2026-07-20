@@ -107,7 +107,7 @@ final class ConversationViewModel {
             )
 
             // Silence any actively-ringing alarm sound. Under normal
-            // conditions tapping "Talk to past-self" dismisses the alarm
+            // conditions tapping "Talk to Coach" dismisses the alarm
             // UI/sound automatically; under Downtime collision it doesn't,
             // and the alarm keeps ringing until we explicitly stop it.
             await AlarmKitService.shared.stopAllActive(alarm)
@@ -131,7 +131,7 @@ final class ConversationViewModel {
         guard !prior.isEmpty else { return "[alarm fired]" }
         var lines = ["[alarm re-fired after snooze]", "", "Transcript from earlier in this wake-up chain:"]
         for m in prior {
-            lines.append("\(m.role == .assistant ? "PAST-SELF" : "USER"): \(m.content)")
+            lines.append("\(m.role == .assistant ? "COACH" : "USER"): \(m.content)")
         }
         return lines.joined(separator: "\n")
     }

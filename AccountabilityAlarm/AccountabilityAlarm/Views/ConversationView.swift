@@ -13,7 +13,7 @@ struct ConversationView: View {
     @State private var tts = TextToSpeechService()
     // AlarmKit owns the ringing now — system UI plays alarm sound at full
     // volume when the alarm fires, then dismisses when the user taps
-    // "Talk to past-self." The in-app conversation is intentionally silent;
+    // "Talk to Coach." The in-app conversation is intentionally silent;
     // the pre-emptive AlarmKit snooze is the persistence mechanism.
 
     @State private var mode: Mode = .voice
@@ -161,7 +161,7 @@ struct ConversationView: View {
                     }
                     if vm.isLoading {
                         HStack {
-                            Text("// past-self thinking…").kicker()
+                            Text("// coach thinking…").kicker()
                             Spacer()
                         }
                         .padding(.horizontal, L.Space.pageH)
@@ -405,7 +405,7 @@ private struct LMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(isAI ? "> past-self" : "you")
+                Text(isAI ? "> coach" : "you")
                     .font(L.Mono.font(9.5))
                     .tracking(0.4)
                     .textCase(.uppercase)

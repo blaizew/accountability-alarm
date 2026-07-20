@@ -6,7 +6,7 @@ A self-contained explainer for redesigning the interface and user experience. Pa
 
 ## One-line pitch
 
-An iOS alarm app where dismissing or snoozing triggers a brief AI conversation that plays your own past-self's reasoning back at you — making dismissal psychologically expensive rather than reflexive.
+An iOS alarm app where dismissing or snoozing triggers a brief AI conversation with a coach who holds you to your own stated reasons — making dismissal psychologically expensive rather than reflexive.
 
 ## The problem it solves
 
@@ -14,12 +14,12 @@ Standard alarms fail because dismissing them has zero psychological cost. You gl
 
 ## Core insight
 
-The AI is not a generic assistant. It is **the voice of your clear-headed past self** — the version of you who set the alarm with full reasoning. Its only argument is the user's own words.
+The AI is not a generic assistant. It is **an accountability coach that holds you to the commitment you made with a clear head** when you set the alarm. Its only argument is the user's own words.
 
 ## Principles (these should shape the visual & interaction language)
 
 1. **Persuasive, not coercive.** The user can always dismiss. The app makes them engage first. It must never feel like a prison.
-2. **Past-you is the advocate.** The product is the user arguing with themselves. The AI is a mirror, not an authority.
+2. **The coach argues only from your own words.** The product is the user being held to a commitment they made themselves. The AI's only leverage is your stated reasons — it never argues from outside authority.
 3. **Short interactions.** 30–60 seconds per exchange. 2–3 sentences per AI message. No walls of text. UI must feel light and finishable.
 4. **Escalating intensity.** 4 rings (Nudge → Math → Mirror → Preview) get progressively more confrontational. The visual system should *feel* this escalation, not just label it.
 5. **Voice-first, text fallback.** Default interaction is speaking out loud — the conversation often happens in bed, in the dark, mid-task. Text mode for when voice is impractical (partner sleeping, public).
@@ -112,7 +112,7 @@ A SwiftUI iOS app, MVVM + service layer, SwiftData for persistence, Claude Haiku
 - Numbers over adjectives. "5.2 hours of sleep" not "not enough sleep."
 - Uses *your own words* — copy should feel like it's quoting you, not lecturing you.
 - Empty states and microcopy should land somewhere between Apple's restraint and a therapist's warmth.
-- Avoid gamification language ("Great job!", "Streak!", "Achievement unlocked!") unless used very deliberately. The product is not a habit-tracker — it's a mirror.
+- Avoid gamification language ("Great job!", "Streak!", "Achievement unlocked!") unless used very deliberately. The product is not a habit-tracker — it holds you to your own reasons.
 
 ## What this app is NOT
 
