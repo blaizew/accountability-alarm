@@ -124,27 +124,36 @@ Every conversation tonight opened with `snoozeCount=0`, across three re-rings:
 
 ### 3.2 Cause
 
-`SnoozeStopIntent` was the only thing incrementing `snoozeCount` on the
-alarm-screen path. Commit `4505b36` replaced it with AlarmKit's native
-`.countdown` snooze, which is handled entirely by the system and fires no
-intent of ours. Nothing has incremented the count from the alarm screen since
-2026-07-23.
+`SnoozeStopIntent` was the only code of ours that ran on the alarm-screen path.
+Commit `4505b36` replaced it with AlarmKit's native `.countdown` snooze, which
+the system handles end to end and which fires no intent of ours. Since
+2026-07-23, a snooze taken from the alarm screen executes no app code at all.
 
 ### 3.3 Consequences
 
+The damage is worse than a miscount. `SnoozeStopIntent` also *created* the
+chain's `AlarmEvent`; the only other creator is the conversation opening. So a
+user who snoozes from the alarm screen and has not yet talked to the Coach has
+**no `AlarmEvent` at all** — not an event with a wrong count.
+
+Confirmed on a clean case 2026-07-27: a test alarm rang, "Snooze 5 min" was
+tapped, and the store showed no new `AlarmEvent` row, no log entry, and
+`snoozedUntil=nil` / `pendingSnoozeIdString=nil` on the alarm.
+
+Downstream:
+
+- When the user finally opens the Coach, `AlarmEvent.openChain` finds nothing
+  and starts a fresh event at `snoozeCount=0`. The entire snooze history of
+  that wake-up chain is **gone**, not merely miscounted.
 - The escalation ladder in `buildSystemPrompt` — "2 snoozes: name the pattern",
-  "3+: this is avoidance" — has been dead for three days. The Coach saw a
-  first-time conversation every round. It said "You snoozed already" at 21:41
-  only because it could read the restored transcript.
-- **The §2 timeline would render tonight as zero snoozes.** The feature's own
+  "3+: this is avoidance" — has been dead since 2026-07-23. On 2026-07-26 the
+  Coach opened at `snoozeCount=0` three times running. It said "You snoozed
+  already" at 21:41 only because it could read the restored transcript.
+- **The §2 timeline would render those snoozes as zero.** The feature's own
   data source is broken.
 
-Also visible in the log: tonight's re-rings are all explained by the 5-minute
-safety-net reschedule that fires when the conversation is opened and the app
-closed without resolving (`rescheduleSnooze ... fires=300s` at 21:30, 21:36,
-21:41). Whether the user *also* tapped "Snooze 5 min" at any point is
-**unknown** — the system countdown leaves no trace. Closing that gap is the
-point of §3.4.
+So §3 must create the chain event, not just increment a counter, when a
+countdown snooze is detected.
 
 ### 3.4 Capturing the countdown snooze
 
@@ -154,37 +163,55 @@ discarding each alarm's `state`. Extend it to read `state` and treat an
 `.alerting → .countdown` transition as a snooze, calling
 `recordSnooze(minutes:source:.countdown)`.
 
-**Unverified:** the observer runs in-process, and whether a detached
-`for await` loop receives updates while the app is suspended — the normal case
-when the user snoozes from the lock screen — is not established.
+**VERIFIED on device 2026-07-27** with a temporary instrumented build. Test:
+alarm scheduled 09:48, app backgrounded (not force-quit), alarm rang, "Snooze
+5 min" tapped at ~09:48:05, store pulled before reopening, app reopened
+09:49:35, store pulled again.
 
-It is not a single point of failure, because `AlarmManager.alarms` is a
-**synchronous** property, and `Alarm` exposes `state` (`.scheduled`,
-`.countdown`, `.paused`, `.alerting`). Reading it at app open reveals a
-snooze in progress with no dependence on the observer having run. So the
-degradation is in timestamp precision, not in detection:
+Results:
 
-| | Mechanism | Result |
-| --- | --- | --- |
-| Best | Observer fires live | Exact transition time |
-| Fallback | Sync poll of `AlarmManager.alarms` at app open / `reconcileOnAppOpen` | Snooze detected; start time bounded to the preceding `postAlert` window (5 min) |
+- **Nothing is captured live.** While the app is backgrounded the process is
+  suspended and cannot execute or write. The first pull showed no trace of the
+  ring or the snooze.
+- **On resume the observer replays the transition sequence**, not merely the
+  final state — it delivered `alerting` and then `countdown` for the same
+  alarm. Detection therefore distinguishes "rang and was snoozed" from "merely
+  counting down". Observed once; treat as a bonus signal, do not build logic
+  that *requires* seeing `alerting`.
+- **The synchronous poll independently confirms** `.countdown` at
+  `reconcileOnAppOpen`. Two detection paths, not one.
+- **All timestamps are resume-time.** The snooze occurred ~09:48:05; every
+  entry reads 09:49:35. Exact event timing is unrecoverable.
+- **No `AlarmEvent` was created** by the ring or the snooze, re-confirming
+  §3.1–3.3 on a clean case.
+
+**Consequence for the design.** Detection is reliable; precision is not.
+Record the snooze on the first observation after the fact and bound its time:
+
+```
+snoozeStart ∈ [ max(scheduledRingTime, T − postAlert), T ]
+```
+
+where `T` is the observation. The bound is never worse than the 5-minute
+countdown window — in the verification run, `[09:48:00, 09:49:35]` against an
+actual of ~09:48:05. Render these entries as approximate (`~9:48 PM`), never
+as observed times.
 
 `Alarm` carries `state` and `countdownDuration` but **no** countdown start or
-fire date, which is why the fallback can only bound the time. Those fields
-(`startDate`, `fireDate`) exist on `AlarmPresentationState.Countdown`, but that
-is the ActivityKit content state, reachable via the Live Activity rather than
-off `Alarm`. Whether our process can read it is unverified and the design does
-not depend on it — treat it as a possible precision upgrade, not a plan.
+fire date, which is why the bound exists. Those fields (`startDate`,
+`fireDate`) live on `AlarmPresentationState.Countdown` — the ActivityKit
+content state, reachable via the Live Activity rather than off `Alarm`.
+Unverified, and the design does not depend on it; treat as a possible
+precision upgrade, not a plan.
 
-Implement the observer path and verify on device. If it does not fire while
-suspended, fall back to the sync poll and mark those timeline entries
-approximate ("~9:33 PM") rather than presenting a bounded guess as observed.
+**API note:** `AlarmManager.alarms` is a *throwing* property
+(`try manager.alarms`), despite the `.swiftinterface` rendering it as a plain
+getter. The sync poll can fail, not merely be imprecise — handle the throw.
 
-**Blast radius if the observer never fires.** The alarm and the snooze itself
-are unaffected — AlarmKit owns both, and this code is read-only bookkeeping.
-§4, §5, §6, and the `CURRENT TIME` line in §2 do not touch snooze records at
-all, so the fix for the original incident stands either way. Only the
-system-button rows of the §2 timeline lose precision.
+**Blast radius.** The alarm and the snooze itself are unaffected in every case
+— AlarmKit owns both, and this code is read-only bookkeeping. §4, §5, §6, and
+the `CURRENT TIME` line in §2 do not touch snooze records at all, so the fix
+for the original incident stands regardless.
 
 ### 3.5 Every snooze counts
 
@@ -201,6 +228,35 @@ The `source` field is still recorded and still rendered in the timeline, but it
 informs the Coach's *tone*, never the count. A user who walked away from an
 open conversation and one who deliberately tapped Snooze are both at the same
 rung of the ladder; the Coach just gets to know which happened.
+
+---
+
+### 3.6 Adjacent bug: restored messages trip the turn limit
+
+Found while reading the 2026-07-26 log. Not caused by this work, but it
+corrupts the same `AlarmEvent` records §3 depends on, so it is fixed here.
+
+```
+22:13:10  conversation opened (restored 11 prior messages, snoozeCount=1)
+22:13:25  user: All right I'm done brushing my teeth now thanks for checking in
+22:13:27  override: Max conversation turns reached
+```
+
+`ConversationViewModel.swift:170` checks
+`messages.count >= Constants.maxConversationTurns * 2` (6 × 2 = 12), but
+`messages` includes the messages restored from earlier in the chain. With 11
+restored, a single exchange trips the limit and the chain is marked
+`overridden`, resetting the streak — while the user was in fact complying.
+
+Any re-opened conversation with a substantial transcript behind it
+self-destructs on the first reply.
+
+**Fix:** count only this session's turns by excluding the already-tracked
+`seededMessageCount`:
+
+```swift
+if !isCompleted, (messages.count - seededMessageCount) >= Constants.maxConversationTurns * 2 {
+```
 
 ---
 
@@ -293,7 +349,7 @@ is framed as a quoted transcript rather than live turn structure.
 
 ## Build order
 
-§3 first — the timeline is worthless while snooze accounting is broken, and the
+§3 first (including §3.6) — the timeline is worthless while snooze accounting is broken, and the
 escalation ladder is currently dead in production. Then §1/§2, then §4/§5, then
 §6.
 
@@ -316,13 +372,26 @@ Real verification is a device build and install to bPhone2, then:
 3. Confirm the timeline renders the right clock times and sources.
 4. Confirm a clamped request ("until midnight") produces the loud message in §4.
 
-Device log query (per the project's debugging procedure):
+### Pulling the device store — pull the WAL too
+
+SwiftData runs SQLite in WAL mode. `default.store` alone is checkpointed and
+can be **hours stale**; recent writes live in `default.store-wal`. Pulling only
+the main file silently shows you the past. (On 2026-07-26 it presented a store
+checkpointed at 21:43 as current, hiding everything after.)
+
+Pull all three files to the same basename so sqlite replays the log:
 
 ```
-xcrun devicectl device copy from --device <UDID> \
-  --domain-type appDataContainer --domain-identifier com.blaizew.AccountabilityAlarm \
-  --source "Library/Application Support/default.store" --destination <dest>
+for ext in "" "-wal" "-shm"; do
+  xcrun devicectl device copy from --device <UDID> \
+    --domain-type appDataContainer --domain-identifier com.blaizew.AccountabilityAlarm \
+    --source "Library/Application Support/default.store$ext" \
+    --destination <dest>/default.store$ext
+done
 
-sqlite3 <dest> "SELECT datetime(ZTIMESTAMP + 978307200,'unixepoch','localtime'),
+sqlite3 <dest>/default.store "SELECT datetime(ZTIMESTAMP + 978307200,'unixepoch','localtime'),
   ZCATEGORYRAW, ZMESSAGE FROM ZALARMLOGENTRY ORDER BY ZTIMESTAMP DESC LIMIT 40;"
 ```
+
+Sanity-check every pull: compare `MAX(ZTIMESTAMP)` against the wall clock
+before drawing conclusions from an absence of rows.
