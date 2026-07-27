@@ -1,8 +1,8 @@
 # Coach time awareness
 
 **Date:** 2026-07-26
-**Status:** approved in outline; §3 revised after device-log evidence, one open
-question flagged in §3.4
+**Status:** approved; all open questions resolved. Ready for an implementation
+plan.
 **Depends on:** commit `4505b36` (AlarmKit countdown snooze)
 
 ## The incident
@@ -154,31 +154,53 @@ discarding each alarm's `state`. Extend it to read `state` and treat an
 `.alerting → .countdown` transition as a snooze, calling
 `recordSnooze(minutes:source:.countdown)`.
 
-**Unverified risk, must be tested on device before this is relied on.** The
-observer runs in-process. Whether a detached `for await` loop receives updates
-while the app is suspended or not running — which is the normal case when the
-user snoozes from the lock screen — is not established. If it does not, the
-fallback is inference at `reconcileOnAppOpen`: on launch, compare the alarm's
-current AlarmKit state and next fire date against what we last recorded, and
-back-fill a `.countdown` record when they imply a snooze we did not observe.
-The timeline must then mark inferred entries as approximate rather than
-presenting them as observed.
+**Unverified:** the observer runs in-process, and whether a detached
+`for await` loop receives updates while the app is suspended — the normal case
+when the user snoozes from the lock screen — is not established.
 
-Verify the observer path first; only build the inference fallback if it fails.
+It is not a single point of failure, because `AlarmManager.alarms` is a
+**synchronous** property, and `Alarm` exposes `state` (`.scheduled`,
+`.countdown`, `.paused`, `.alerting`). Reading it at app open reveals a
+snooze in progress with no dependence on the observer having run. So the
+degradation is in timestamp precision, not in detection:
 
-### 3.5 Open question — does the safety-net snooze count?
+| | Mechanism | Result |
+| --- | --- | --- |
+| Best | Observer fires live | Exact transition time |
+| Fallback | Sync poll of `AlarmManager.alarms` at app open / `reconcileOnAppOpen` | Snooze detected; start time bounded to the preceding `postAlert` window (5 min) |
 
-The `.safetyNet` reschedule fires when the user opens the conversation and
-closes the app without resolving. That is behaviourally avoidance — it is
-exactly what happened three times tonight — so the recommendation is to record
-it in the timeline **and** count it toward the ladder.
+`Alarm` carries `state` and `countdownDuration` but **no** countdown start or
+fire date, which is why the fallback can only bound the time. Those fields
+(`startDate`, `fireDate`) exist on `AlarmPresentationState.Countdown`, but that
+is the ActivityKit content state, reachable via the Live Activity rather than
+off `Alarm`. Whether our process can read it is unverified and the design does
+not depend on it — treat it as a possible precision upgrade, not a plan.
 
-The counter-argument: it is not a deliberate user action, and counting it makes
-the Coach hostile toward someone whose app crashed or who was interrupted.
+Implement the observer path and verify on device. If it does not fire while
+suspended, fall back to the sync poll and mark those timeline entries
+approximate ("~9:33 PM") rather than presenting a bounded guess as observed.
 
-**Recommendation:** count it, but label it distinctly in the timeline (as shown
-in §2) so the Coach can tell a deliberate snooze from a walk-away and calibrate
-its tone. **Needs the user's decision before implementation.**
+**Blast radius if the observer never fires.** The alarm and the snooze itself
+are unaffected — AlarmKit owns both, and this code is read-only bookkeeping.
+§4, §5, §6, and the `CURRENT TIME` line in §2 do not touch snooze records at
+all, so the fix for the original incident stands either way. Only the
+system-button rows of the §2 timeline lose precision.
+
+### 3.5 Every snooze counts
+
+**Decided (Blaize, 2026-07-26): all snoozes count toward the escalation
+ladder** — `.countdown`, `.snoozeButton`, `.coach`, and `.safetyNet` alike.
+`recordSnooze` increments `snoozeCount` for every source without exception;
+there is no "doesn't really count" case.
+
+The `.safetyNet` reschedule — conversation opened, app closed without resolving
+— counts too. It is behaviourally avoidance, and it is exactly what happened
+three times on 2026-07-26.
+
+The `source` field is still recorded and still rendered in the timeline, but it
+informs the Coach's *tone*, never the count. A user who walked away from an
+open conversation and one who deliberately tapped Snooze are both at the same
+rung of the ladder; the Coach just gets to know which happened.
 
 ---
 
