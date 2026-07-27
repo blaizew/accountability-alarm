@@ -13,12 +13,17 @@ private typealias AKAlarm = AlarmKit.Alarm
 /// Each Alarm in our model is backed by one (or one-per-weekday) AlarmKit
 /// alarm. When the alarm fires, the system shows a full-screen alert with two
 /// buttons:
-///   • "Talk to Coach" — secondaryIntent runs `OpenConversationIntent`,
-///     which launches the app and opens the conversation. This path requires
-///     the app to launch, so it doesn't work under Screen Time Downtime.
-///   • "Slide to Stop" — stopIntent runs `SnoozeStopIntent`, which schedules
-///     a 5-minute snooze in the background. Critically, this runs WITHOUT
-///     launching the app, so it works even when Downtime restricts the app.
+///   • "Slide to Stop" — stopIntent runs `OpenConversationIntent`, which
+///     launches the app and opens the conversation. This path requires the
+///     app to launch, so it doesn't work under Screen Time Downtime.
+///   • "Snooze 5 min" — secondaryButtonBehavior `.countdown`, handled
+///     entirely by the system via `countdownDuration.postAlert`. No intent of
+///     ours runs, so it works even when Downtime restricts the app — and,
+///     unlike the `SnoozeStopIntent` it replaced, the re-ring is scheduled by
+///     AlarmKit itself rather than by us.
+///
+/// Note the consequence: because no intent of ours fires on that snooze, the
+/// chain's `AlarmEvent.snoozeCount` is NOT incremented by it.
 ///
 /// The only way to truly silence the alarm is for the user to engage with the
 /// conversation and have the LLM authorize Comply.
@@ -153,15 +158,22 @@ final class AlarmKitService {
     /// generic `Metadata` parameter so type inference doesn't fail.
     private func scheduleOne(alarm: Alarm, schedule: AKAlarm.Schedule, isSnooze: Bool) async -> UUID? {
         let attributes = AlarmAttributes<Metadata>(
-            presentation: AlarmPresentation(alert: alertContent(for: alarm, isSnooze: isSnooze)),
+            presentation: AlarmPresentation(
+                alert: alertContent(for: alarm, isSnooze: isSnooze),
+                countdown: AlarmPresentation.Countdown(title: "Snoozing…")
+            ),
             metadata: Metadata(),
             tintColor: L.Palette.accent
         )
         let config: AlarmManager.AlarmConfiguration<Metadata> = .init(
+            countdownDuration: AKAlarm.CountdownDuration(
+                preAlert: nil,
+                postAlert: TimeInterval(Constants.stopButtonSnoozeMinutes * 60)
+            ),
             schedule: schedule,
             attributes: attributes,
-            stopIntent: SnoozeStopIntent(alarmId: alarm.id.uuidString),
-            secondaryIntent: OpenConversationIntent(alarmId: alarm.id.uuidString)
+            stopIntent: OpenConversationIntent(alarmId: alarm.id.uuidString),
+            secondaryIntent: nil
         )
         let id = UUID()
         do {
@@ -408,10 +420,10 @@ final class AlarmKitService {
             stringLiteral: alarm.label.isEmpty ? "Alarm" : alarm.label
         )
 
-        let talkButton = AlarmButton(
-            text: "Talk to Coach",
+        let snoozeButton = AlarmButton(
+            text: "Snooze \(Constants.stopButtonSnoozeMinutes) min",
             textColor: .white,
-            systemImageName: "bubble.left.and.bubble.right"
+            systemImageName: "zzz"
         )
 
         // iOS 26.1+: the stopButton parameter is deprecated. The system now
@@ -419,8 +431,8 @@ final class AlarmKitService {
         // the AlarmConfiguration.
         return AlarmPresentation.Alert(
             title: title,
-            secondaryButton: talkButton,
-            secondaryButtonBehavior: .custom
+            secondaryButton: snoozeButton,
+            secondaryButtonBehavior: .countdown
         )
     }
 
