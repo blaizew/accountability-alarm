@@ -231,6 +231,40 @@ rung of the ladder; the Coach just gets to know which happened.
 
 ---
 
+### 3.5b Reconcile now mis-records snoozed nights as "ignored"
+
+A second consequence of §3.3, and the reason §3 is urgent rather than merely
+desirable.
+
+`recordMissedFirings` (`AlarmKitService.swift:372`) has two guards against
+falsely recording a firing the user actually engaged with:
+
+```swift
+if let until = alarm.snoozedUntil, until > now { continue }          // :377
+if alarm.events.contains(where: { $0.firedAt > window }) { continue } // :389
+```
+
+Post-`4505b36`, **both are blind**. A countdown snooze sets no `snoozedUntil`
+and creates no `AlarmEvent`, so neither guard fires.
+
+With `missedGraceMinutes = 30`, a user who snoozes from the alarm screen past
+30 minutes (six taps) and then opens the app has that night recorded as
+`outcome = "ignored"` — the ledger's "slept through it / muted it / swiped it
+away" — for a night they were actively fighting the alarm.
+
+It compounds: the inserted event is not `pending`, so `AlarmEvent.openChain`
+skips it and the conversation creates a *second* event. One night, two rows,
+one of them false.
+
+To be explicit about what is **not** broken: nothing runs while the app is
+closed, so no event is closed behind the user's back, and the alarm re-rings
+indefinitely regardless — AlarmKit owns the countdown and needs no app code.
+This is a ledger-truth failure at app open, not an alarm-reliability failure.
+
+Fixing §3.4 fixes this too: once a countdown snooze creates the chain event,
+guard `:389` starts firing again. The implementation must verify that, not
+assume it.
+
 ### 3.6 Adjacent bug: restored messages trip the turn limit
 
 Found while reading the 2026-07-26 log. Not caused by this work, but it
@@ -251,12 +285,9 @@ restored, a single exchange trips the limit and the chain is marked
 Any re-opened conversation with a substantial transcript behind it
 self-destructs on the first reply.
 
-**Fix:** count only this session's turns by excluding the already-tracked
-`seededMessageCount`:
-
-```swift
-if !isCompleted, (messages.count - seededMessageCount) >= Constants.maxConversationTurns * 2 {
-```
+**Fixed and shipped** in commit `98bd42f` (2026-07-27), ahead of the rest of
+this spec: count only this session's turns by excluding the already-tracked
+`seededMessageCount`. Installed on bPhone2 the same day.
 
 ---
 
