@@ -167,7 +167,13 @@ final class ConversationViewModel {
 
         await runAssistantTurn(context: context)
 
-        if !isCompleted, messages.count >= Constants.maxConversationTurns * 2 {
+        // Count only THIS session's turns. `messages` is seeded with the
+        // chain's earlier conversations on a re-ring, and counting those
+        // toward the limit made any re-opened conversation with a decent
+        // transcript behind it override itself on the first reply — logging
+        // "overridden" and resetting the streak while the user was complying.
+        let turnsThisSession = messages.count - seededMessageCount
+        if !isCompleted, turnsThisSession >= Constants.maxConversationTurns * 2 {
             handleOverride(reason: "Max conversation turns reached", context: context)
         }
     }
