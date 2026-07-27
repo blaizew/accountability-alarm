@@ -259,11 +259,46 @@ one of them false.
 To be explicit about what is **not** broken: nothing runs while the app is
 closed, so no event is closed behind the user's back, and the alarm re-rings
 indefinitely regardless — AlarmKit owns the countdown and needs no app code.
-This is a ledger-truth failure at app open, not an alarm-reliability failure.
+AlarmKit imposes no cap on snooze count (`AlarmError.maximumLimitReached`
+governs concurrent scheduled alarms, not snoozes). This is a ledger-truth
+failure at app open, not an alarm-reliability failure.
 
-Fixing §3.4 fixes this too: once a countdown snooze creates the chain event,
-guard `:389` starts firing again. The implementation must verify that, not
-assume it.
+#### Replace the grace window with a state check
+
+Fixing §3.4 makes guard `:389` fire again, but that only patches the symptom.
+The deeper problem is that `missedGraceMinutes` is a *time-based proxy* for
+"is this wake-up chain still in flight?" — and §3.4 established that we can
+read the real thing: `Alarm.state` is available synchronously at app open.
+
+A threshold is strictly worse than the signal it approximates. Six taps was
+never a designed number; it is 30 minutes divided by the countdown duration,
+a quantity nobody chose. **Delete `missedGraceMinutes`** and judge on state:
+
+| Alarm state at app open | Verdict |
+| --- | --- |
+| `.alerting` or `.countdown` | Chain is live. Never record ignored, however long it has been — twenty snoozes across three hours is engagement. |
+| `.scheduled`, no event for the last firing | Nothing touched it. Record ignored **immediately** — no waiting, ledger correct sooner. |
+
+`missedLookbackHours` stays, doing a different and still-necessary job: don't
+backfill firings from a week ago.
+
+#### An "ignored" verdict must be revisable
+
+Recording sooner widens an existing hole. `AlarmEvent.openChain` matches only
+`outcome == "pending"`, so an `ignored` row is invisible to it: record ignored
+at 21:32, user opens the Coach at 21:35, and the night has two rows.
+
+The ledger has to be able to change its mind when new evidence arrives.
+`openChain` should adopt a recent `ignored` event for the same firing and
+reopen it as `pending`, rather than inserting a second event alongside it.
+
+#### Unresolved — needs a device test
+
+What state does a completely untouched alert end in? If iOS auto-dismisses it
+and the alarm returns to `.scheduled`, the table above is complete. If it
+lands elsewhere, or lingers `.alerting` indefinitely, the `.scheduled` arm
+needs a companion. See "Test B" in Verification. **Do not implement the
+reconcile arm until this is answered** — the rest of §3 does not depend on it.
 
 ### 3.6 Adjacent bug: restored messages trip the turn limit
 
@@ -377,6 +412,8 @@ is framed as a quoted transcript rather than live turn structure.
   prior-night transcripts. Considered and deliberately deferred.
 - Migrating existing `AlarmEvent` rows to backfill `snoozeLog`.
 - Raising the 30-minute snooze cap.
+- Re-tuning `missedLookbackHours`. It keeps its current job (don't backfill
+  ancient firings) and its current value.
 
 ## Build order
 
@@ -392,16 +429,39 @@ a target is ever added, and hand-checkable now.
 
 Real verification is a device build and install to bPhone2, then:
 
-1. **§3 first, on its own.** Let the alarm ring, tap "Snooze 5 min" from the
-   alarm screen, and confirm via the pulled device log that `snoozeCount`
-   increments and a `.countdown` `SnoozeRecord` is written. This is the step
-   that validates the unverified risk in §3.4 — do not build §2 on top of it
-   until it passes.
-2. Reproduce the original failure: ring, snooze twice, open the Coach several
-   minutes later, ask for "until 10", and confirm the alarm returns at 10:00
-   rather than 30 minutes out.
-3. Confirm the timeline renders the right clock times and sources.
-4. Confirm a clamped request ("until midnight") produces the loud message in §4.
+**Test A — countdown snooze is recorded.** Let the alarm ring, tap "Snooze
+5 min" from the alarm screen, reopen the app, and confirm the store shows
+`snoozeCount` incremented and a `.countdown` `SnoozeRecord` written. Do not
+build §2 on top of §3 until this passes.
+
+**Test B — what an ignored alert becomes.** *Prerequisite for the reconcile
+arm of §3.5b; run before implementing it.* Set an alarm, let it ring, and
+touch nothing at all — no snooze, no stop, no app. Wait until the alert stops
+of its own accord. Then open the app and read the `PROBE syncPoll` line. The
+question is which state the alarm reports: `.scheduled` (the §3.5b table is
+complete), `.alerting` (it never gave up, and the `.scheduled` arm needs a
+companion), or something else. Also note how long the alert rang before
+stopping — that number bounds how quickly a genuine miss can be judged.
+
+**Test C — no false "ignored" past the old grace window.** Snooze from the
+alarm screen more than six times (past 30 minutes), then open the app.
+Confirm the store holds exactly **one** event, `pending`, with the right
+`snoozeCount` — and no `"ignored"` row. This is the regression test for the
+ordering hazard below.
+
+**Ordering hazard.** `reconcileOnAppOpen` runs orphan cleanup →
+`recordMissedFirings` (`:357`) → `closeAbandonedChains` (`:358`). The
+countdown-snooze detection **must run before `:357`**. If it runs after, the
+event does not exist when `recordMissedFirings` checks, the false `"ignored"`
+is written anyway, and the event appears a moment later — so the bug survives
+while looking fixed. Test C is what catches it.
+**Test D — the original incident.** Ring, snooze twice, open the Coach several
+minutes later, ask for "until 10", and confirm the alarm returns at 10:00
+rather than 30 minutes out.
+
+**Test E — presentation.** Confirm the timeline renders the right clock times
+and sources, that approximate entries read `~9:48 PM`, and that a clamped
+request ("until midnight") produces the loud message in §4.
 
 ### Pulling the device store — pull the WAL too
 
