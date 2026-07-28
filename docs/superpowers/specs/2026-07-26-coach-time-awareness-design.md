@@ -170,9 +170,13 @@ alarm scheduled 09:48, app backgrounded (not force-quit), alarm rang, "Snooze
 
 Results:
 
-- **Nothing is captured live.** While the app is backgrounded the process is
-  suspended and cannot execute or write. The first pull showed no trace of the
-  ring or the snooze.
+- **Background capture is unreliable, not absent.** In this run the first pull
+  showed no trace of the ring or the snooze — a backgrounded process is
+  suspended and cannot execute or write. But Test B later logged an observer
+  line at 21:10:34 with no app open and no reconcile, ~15 minutes after that
+  alarm rang. So AlarmKit does sometimes wake the process (the alert is a Live
+  Activity), just late and not at the transition. Treat background delivery as
+  possible but undependable; the design must not rely on it.
 - **On resume the observer replays the transition sequence**, not merely the
   final state — it delivered `alerting` and then `countdown` for the same
   alarm. Detection therefore distinguishes "rang and was snoozed" from "merely
@@ -263,7 +267,7 @@ AlarmKit imposes no cap on snooze count (`AlarmError.maximumLimitReached`
 governs concurrent scheduled alarms, not snoozes). This is a ledger-truth
 failure at app open, not an alarm-reliability failure.
 
-#### Replace the grace window with a state check
+#### Delete the grace window; judge on state and firing lifecycle
 
 Fixing §3.4 makes guard `:389` fire again, but that only patches the symptom.
 The deeper problem is that `missedGraceMinutes` is a *time-based proxy* for
@@ -272,15 +276,63 @@ read the real thing: `Alarm.state` is available synchronously at app open.
 
 A threshold is strictly worse than the signal it approximates. Six taps was
 never a designed number; it is 30 minutes divided by the countdown duration,
-a quantity nobody chose. **Delete `missedGraceMinutes`** and judge on state:
+a quantity nobody chose.
 
-| Alarm state at app open | Verdict |
-| --- | --- |
-| `.alerting` or `.countdown` | Chain is live. Never record ignored, however long it has been — twenty snoozes across three hours is engagement. |
-| `.scheduled`, no event for the last firing | Nothing touched it. Record ignored **immediately** — no waiting, ledger correct sooner. |
+**Test B (2026-07-27) killed two successive replacements before the right rule
+emerged.** An ignored alarm rang for 15 minutes, went silent, and then stayed
+`.alerting` indefinitely — still `.alerting` 35 minutes after firing, with the
+alert on screen and both buttons live. It only cleared when `stopAnyAlerting()`
+ran at app open.
+
+That falsified the first replacement ("`.alerting` ⇒ chain is live, never
+ignored"), which would have meant a genuinely ignored alarm is *never* recorded
+as ignored — breaking the exact case the code exists for, and only on nights
+the user slept through.
+
+It also falsified the second ("`.alerting` past the 15-minute ring duration ⇒
+ignored"). 15 minutes is when the *sound* stops. Nothing else changes: state
+stays `.alerting`, the alert stays on screen, both buttons stay live, and the
+user can still engage at minute 35. It measures an audio policy and says
+nothing about whether the firing is still engageable — arbitrariness with a
+citation, worse than 30 because it looks principled.
+
+**Delete `missedGraceMinutes` and add nothing in its place.** The question is
+not "how long has it been" but "is this firing over, and did anything engage
+it" — and reconcile has a definitive answer, because *reconcile is what ends
+it*: `stopAnyAlerting()` (`:362`) is what clears a stuck alert.
+
+| State at app open | Firing status | Verdict |
+| --- | --- | --- |
+| `.countdown` | Live — the user snoozed | Engaged. Create/keep the chain. Never ignored. |
+| `.alerting` | Still open, but reconcile is about to end it | No event ⇒ record ignored **at the moment we clear it** |
+| `.scheduled` | Already over | No event near the due time ⇒ ignored |
+
+No numbers. What makes it safe is revisability (below): the ledger records its
+best current read and corrects itself when better evidence arrives, rather
+than stalling on a timer hoping ambiguity resolves.
 
 `missedLookbackHours` stays, doing a different and still-necessary job: don't
 backfill firings from a week ago.
+
+#### Two alarms alerting at once
+
+Observed live during Test B: the abandoned 20:55 alarm was still `.alerting`
+when the 21:30 alarm fired, and opening the 21:30 Coach silenced both.
+
+`ConversationViewModel.setup` calls `stopAllActive`, which calls
+`stopAnyAlerting()` — and that stops **every** alerting alarm, not just its
+own. So one alarm's conversation silently clears another's alert, and the app,
+not the user, decides the first was abandoned.
+
+**Decided (Blaize, 2026-07-27): scope it.** `stopAllActive` stops only the
+alarms belonging to its own `Alarm` record. Two alarms ringing means two
+commitments to answer; silencing one for free contradicts the premise. The
+broad sweep is kept **only** for true orphans — AlarmKit alarms no `Alarm`
+record tracks — which is the ghost-ringer backstop it was written for.
+
+A firing genuinely abandoned this way is recorded as **`ignored`**, reusing the
+existing outcome rather than adding a fifth. Nothing engaged with it; that is
+what ignored means. (Decided 2026-07-27.)
 
 #### An "ignored" verdict must be revisable
 
@@ -292,13 +344,10 @@ The ledger has to be able to change its mind when new evidence arrives.
 `openChain` should adopt a recent `ignored` event for the same firing and
 reopen it as `pending`, rather than inserting a second event alongside it.
 
-#### Unresolved — needs a device test
+#### Test B is answered — the reconcile arm is unblocked
 
-What state does a completely untouched alert end in? If iOS auto-dismisses it
-and the alarm returns to `.scheduled`, the table above is complete. If it
-lands elsewhere, or lingers `.alerting` indefinitely, the `.scheduled` arm
-needs a companion. See "Test B" in Verification. **Do not implement the
-reconcile arm until this is answered** — the rest of §3 does not depend on it.
+Resolved 2026-07-27: an untouched alert lingers `.alerting` indefinitely. The
+table above reflects that. No gate remains on §3.
 
 ### 3.6 Adjacent bug: restored messages trip the turn limit
 
@@ -434,14 +483,11 @@ Real verification is a device build and install to bPhone2, then:
 `snoozeCount` incremented and a `.countdown` `SnoozeRecord` written. Do not
 build §2 on top of §3 until this passes.
 
-**Test B — what an ignored alert becomes.** *Prerequisite for the reconcile
-arm of §3.5b; run before implementing it.* Set an alarm, let it ring, and
-touch nothing at all — no snooze, no stop, no app. Wait until the alert stops
-of its own accord. Then open the app and read the `PROBE syncPoll` line. The
-question is which state the alarm reports: `.scheduled` (the §3.5b table is
-complete), `.alerting` (it never gave up, and the `.scheduled` arm needs a
-companion), or something else. Also note how long the alert rang before
-stopping — that number bounds how quickly a genuine miss can be judged.
+**Test B — what an ignored alert becomes.** *Run 2026-07-27; ANSWERED.* An
+alarm rang for 15 minutes, went silent, and stayed `.alerting` indefinitely —
+still `.alerting` 35 minutes after firing, alert on screen, both buttons live.
+It never returns to `.scheduled` on its own; only `stopAnyAlerting()` at app
+open clears it. See §3.5b for the two rules this falsified.
 
 **Test C — no false "ignored" past the old grace window.** Snooze from the
 alarm screen more than six times (past 30 minutes), then open the app.
