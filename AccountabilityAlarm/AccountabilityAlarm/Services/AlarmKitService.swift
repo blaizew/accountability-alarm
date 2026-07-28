@@ -390,9 +390,15 @@ final class AlarmKitService {
         // Run these in the wrong order and a snoozed night is logged ignored
         // while the event materialises a moment later, so the app's own UI
         // looks correct and only the store is wrong. AC-3.3 guards this.
-        await detectCountdownSnoozes(alarms: alarms, context: context)
+        let countingDown: Set<UUID>
+        if let live = try? manager.alarms {
+            countingDown = Set(live.filter { $0.state == .countdown }.map(\.id))
+        } else {
+            countingDown = []
+        }
+        await detectCountdownSnoozes(alarms: alarms, countingDown: countingDown, context: context)
 
-        await recordMissedFirings(alarms: alarms, context: context)
+        await recordMissedFirings(alarms: alarms, countingDown: countingDown, context: context)
         await closeAbandonedChains(context: context)
 
         // Ghost ringers — alerting alarms no Alarm record claims — die the
@@ -412,13 +418,17 @@ final class AlarmKitService {
     /// `.countdown` means a snooze is running right now. If the chain has no
     /// event, or has one whose recorded snoozes don't reach this countdown,
     /// the user snoozed without us seeing it.
+    /// `countingDown` is injected rather than read from `manager` so the
+    /// ordering hazard above can be regression-tested against synthetic state
+    /// instead of only on a physical device (spec AC-3.3).
     @MainActor
-    private func detectCountdownSnoozes(alarms: [Alarm], context: ModelContext) async {
-        guard let live = try? manager.alarms else { return }
-        let countingDown = Set(live.filter { $0.state == .countdown }.map(\.id))
+    func detectCountdownSnoozes(
+        alarms: [Alarm],
+        countingDown: Set<UUID>,
+        context: ModelContext,
+        now: Date = Date()
+    ) async {
         guard !countingDown.isEmpty else { return }
-
-        let now = Date()
         for alarm in alarms where alarm.enabled {
             await Task.yield()
 
@@ -440,6 +450,14 @@ final class AlarmKitService {
                 // The chain began when the alarm rang, not when we noticed.
                 if let due = lastDueFireDate(for: alarm, now: now) { fresh.firedAt = due }
                 context.insert(fresh)
+                // Maintain the inverse relationship explicitly. `insert` alone
+                // does not make the event visible via `alarm.events` until the
+                // context saves — and recordMissedFirings, running later in
+                // this same pass, decides "nobody engaged" by reading exactly
+                // that. Without this the ordering fix silently does nothing.
+                if !alarm.events.contains(where: { $0 === fresh }) {
+                    alarm.events.append(fresh)
+                }
                 event = fresh
             }
 
@@ -487,15 +505,14 @@ final class AlarmKitService {
     /// An `ignored` verdict is not final: `AlarmEvent.openChain` adopts and
     /// reopens it if the user engages afterwards. Recording early is safe
     /// because the ledger can change its mind.
-    private func recordMissedFirings(alarms: [Alarm], context: ModelContext) async {
-        let now = Date()
-        let statesById: [UUID: AKAlarm.State]
-        if let live = try? manager.alarms {
-            statesById = Dictionary(live.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
-        } else {
-            statesById = [:]
-        }
-
+    /// `countingDown` is injected for the same reason as
+    /// `detectCountdownSnoozes` — see AC-3.3.
+    func recordMissedFirings(
+        alarms: [Alarm],
+        countingDown: Set<UUID>,
+        context: ModelContext,
+        now: Date = Date()
+    ) async {
         for alarm in alarms {
             guard alarm.enabled else { continue }
             // A live snooze means the chain is still in flight — not missed.
@@ -520,12 +537,18 @@ final class AlarmKitService {
                 (alarm.alarmKitIdStrings + [alarm.pendingSnoozeIdString].compactMap { $0 })
                     .compactMap(UUID.init(uuidString:))
             )
-            if ids.contains(where: { statesById[$0] == .countdown }) { continue }
+            if !ids.isDisjoint(with: countingDown) { continue }
 
             let missed = AlarmEvent(alarm: alarm)
             missed.firedAt = due
             missed.outcome = "ignored"
             context.insert(missed)
+            // Same reason as in detectCountdownSnoozes: keep `alarm.events`
+            // truthful within this pass, so a later alarm in the loop (or a
+            // repeat pass) doesn't record the same firing twice.
+            if !alarm.events.contains(where: { $0 === missed }) {
+                alarm.events.append(missed)
+            }
             await LogService.shared.log(
                 .app,
                 "reconcile: recorded ignored firing (no engagement) due=\(due)",

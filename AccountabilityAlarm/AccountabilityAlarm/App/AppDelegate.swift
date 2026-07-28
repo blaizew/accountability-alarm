@@ -22,6 +22,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         Task { await SnoozeResolverSelfCheck.run() }
         Task { await TimeContextSelfCheck.run() }
         Task { await LedgerSelfCheck.run() }
+        Task { await ReconcileSelfCheck.run() }
         return true
     }
 
