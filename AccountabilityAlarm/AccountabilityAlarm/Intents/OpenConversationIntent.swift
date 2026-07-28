@@ -44,7 +44,13 @@ struct OpenConversationIntent: LiveActivityIntent {
                 if let alarm = try? context.fetch(FetchDescriptor(predicate: predicate)).first {
                     await AlarmKitService.shared.stopAllActive(alarm)
                 } else {
-                    await AlarmKitService.shared.stopAnyAlerting()
+                    // No Alarm record for this ID — we can't scope the stop,
+                    // so fall back to the ghost-ringer sweep. Still spares
+                    // alarms the store does track: another alarm ringing
+                    // legitimately is a commitment the user must answer.
+                    await AlarmKitService.shared.stopUntrackedAlerting(
+                        trackedIds: AlarmKitService.trackedAlarmKitIds(in: context)
+                    )
                 }
             }
             AlarmRoute.shared.openConversation(alarmId: uuid)

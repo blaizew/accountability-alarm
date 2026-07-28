@@ -17,10 +17,12 @@ enum Constants {
     /// still-pending event is closed as "ignored" by reconcile.
     static let chainWindowHours = 6
 
-    /// Missed-firing detection (reconcile): how long after the scheduled fire
-    /// time we wait before calling a never-engaged firing "ignored". Covers
-    /// the system alert's own ring window plus a buffer.
-    static let missedGraceMinutes = 30
+    // `missedGraceMinutes` used to live here. Deleted 2026-07-27: it was a
+    // time-based proxy for "is this chain still in flight?", and reconcile now
+    // reads AlarmKit's actual state instead. Every candidate threshold was
+    // arbitrary — 30 minutes silently became a six-tap snooze budget once
+    // alarm-screen snoozes stopped creating events, and the alert's 15-minute
+    // ring duration marks only when the sound stops, not when the firing ends.
 
     /// Missed-firing detection: only the most recent scheduled firing within
     /// this lookback is considered. Bounds the error window for one-shot

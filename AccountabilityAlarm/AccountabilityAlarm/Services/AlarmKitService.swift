@@ -264,6 +264,13 @@ final class AlarmKitService {
     /// when the conversation opens to silence anything actively ringing —
     /// covers the Downtime-collision case where the secondary button tap
     /// didn't dispatch the intent in time to silence the original alarm.
+    ///
+    /// Deliberately scoped to THIS alarm. It used to end with a blanket
+    /// `stopAnyAlerting()`, which meant opening the Coach for one alarm
+    /// silenced any other alarm that happened to be ringing — the app, rather
+    /// than the user, deciding the other one was abandoned. Two alarms ringing
+    /// is two commitments to answer. The blanket sweep now lives only on the
+    /// orphan path in `reconcileOnAppOpen`, which is what it was written for.
     func stopAllActive(_ alarm: Alarm) async {
         for s in alarm.alarmKitIdStrings {
             if let id = UUID(uuidString: s) { await stop(alarmKitId: id) }
@@ -271,19 +278,42 @@ final class AlarmKitService {
         if let s = alarm.pendingSnoozeIdString, let id = UUID(uuidString: s) {
             await stop(alarmKitId: id)
         }
-        await stopAnyAlerting()
     }
 
-    /// Stop every alarm AlarmKit reports as actively alerting. Every alarm
-    /// in the manager's list belongs to this app, so this is always safe —
-    /// and it's the only way to silence a ringer whose ID we lost track of
-    /// (orphans from older builds, clobbered pendingSnooze records). A
-    /// ringing phone with no working Stop affordance forces the user to
-    /// reboot; this sweep is the backstop against that.
-    func stopAnyAlerting() async {
+    /// Stop alerting alarms that no `Alarm` record claims — the ghost-ringer
+    /// backstop. A ringing phone with no working Stop affordance forces the
+    /// user to reboot; this sweep is the guard against that.
+    ///
+    /// `trackedIds` is every AlarmKit ID our store still accounts for. Alarms
+    /// in that set are left alone even while alerting: they belong to a real
+    /// commitment, and silencing them for free is exactly what `stopAllActive`
+    /// stopped doing.
+    /// Every AlarmKit ID the store still accounts for, across all alarms.
+    /// Used by callers that need the ghost-ringer sweep but have no single
+    /// alarm to scope it to.
+    @MainActor
+    static func trackedAlarmKitIds(in context: ModelContext) -> Set<UUID> {
+        guard let alarms = try? context.fetch(FetchDescriptor<Alarm>()) else { return [] }
+        var ids: Set<UUID> = []
+        for alarm in alarms where alarm.enabled {
+            for s in alarm.alarmKitIdStrings {
+                if let u = UUID(uuidString: s) { ids.insert(u) }
+            }
+            if let s = alarm.pendingSnoozeIdString, let u = UUID(uuidString: s) {
+                ids.insert(u)
+            }
+        }
+        return ids
+    }
+
+    func stopUntrackedAlerting(trackedIds: Set<UUID>) async {
         guard let live = try? manager.alarms else { return }
-        for a in live where a.state == .alerting {
-            await LogService.shared.log(.alarmkit, "stopAnyAlerting: stopping alerting \(a.id.uuidString.prefix(8))", alarmKitId: a.id.uuidString)
+        for a in live where a.state == .alerting && !trackedIds.contains(a.id) {
+            await LogService.shared.log(
+                .alarmkit,
+                "stopUntrackedAlerting: stopping orphan \(a.id.uuidString.prefix(8))",
+                alarmKitId: a.id.uuidString
+            )
             await stop(alarmKitId: a.id)
         }
     }
@@ -354,23 +384,118 @@ final class AlarmKitService {
             await cancel(alarmKitId: orphanId)
         }
 
+        // MUST run before recordMissedFirings. A countdown snooze executes no
+        // code of ours, so the chain event doesn't exist until this creates
+        // it — and recordMissedFirings treats "no event" as "nobody engaged".
+        // Run these in the wrong order and a snoozed night is logged ignored
+        // while the event materialises a moment later, so the app's own UI
+        // looks correct and only the store is wrong. AC-3.3 guards this.
+        await detectCountdownSnoozes(alarms: alarms, context: context)
+
         await recordMissedFirings(alarms: alarms, context: context)
         await closeAbandonedChains(context: context)
 
-        // A ghost ringer (alerting alarm nobody can stop) should die the
-        // moment the app is opened, whatever else is going on.
-        await stopAnyAlerting()
+        // Ghost ringers — alerting alarms no Alarm record claims — die the
+        // moment the app opens. Alarms we still track are left ringing; they
+        // represent a real commitment the user hasn't answered yet.
+        await stopUntrackedAlerting(trackedIds: trackedIds)
     }
 
-    /// A firing counts as engaged if ANY AlarmEvent exists near the due time
-    /// — both opening the conversation and tapping the system Stop button
-    /// create (or reuse) the chain's event. No event, no live snooze, and
-    /// we're past the grace window ⇒ the user slept through it, muted it
-    /// with a hardware button, or swiped the alert away. None of those are
-    /// detectable in the moment (AlarmKit gives no callback), so this is
-    /// where the ledger learns the day was missed.
+    /// Detect snoozes taken from the alarm screen and enter them in the ledger.
+    ///
+    /// AlarmKit's native countdown snooze runs no code of ours — no intent, no
+    /// callback — so this is the only place the app can learn it happened.
+    /// Called at app open, keyed on the alarm's *current* state rather than on
+    /// an observed transition: the observer's in-memory state doesn't survive
+    /// a cold launch, and background delivery is unreliable (spec §3.4).
+    ///
+    /// `.countdown` means a snooze is running right now. If the chain has no
+    /// event, or has one whose recorded snoozes don't reach this countdown,
+    /// the user snoozed without us seeing it.
+    @MainActor
+    private func detectCountdownSnoozes(alarms: [Alarm], context: ModelContext) async {
+        guard let live = try? manager.alarms else { return }
+        let countingDown = Set(live.filter { $0.state == .countdown }.map(\.id))
+        guard !countingDown.isEmpty else { return }
+
+        let now = Date()
+        for alarm in alarms where alarm.enabled {
+            await Task.yield()
+
+            let ids = Set(
+                (alarm.alarmKitIdStrings + [alarm.pendingSnoozeIdString].compactMap { $0 })
+                    .compactMap(UUID.init(uuidString:))
+            )
+            guard !ids.isDisjoint(with: countingDown) else { continue }
+
+            // A snooze we granted ourselves already set snoozedUntil and was
+            // recorded when granted. Only an unaccounted countdown is new.
+            if let until = alarm.snoozedUntil, until > now { continue }
+
+            let event: AlarmEvent
+            if let existing = AlarmEvent.openChain(for: alarm) {
+                event = existing
+            } else {
+                let fresh = AlarmEvent(alarm: alarm)
+                // The chain began when the alarm rang, not when we noticed.
+                if let due = lastDueFireDate(for: alarm, now: now) { fresh.firedAt = due }
+                context.insert(fresh)
+                event = fresh
+            }
+
+            // Exact timing is unrecoverable — the snooze happened while we
+            // were suspended. Bound it: no earlier than the alarm rang, and no
+            // more than one countdown before now.
+            let minutes = Constants.stopButtonSnoozeMinutes
+            let earliest = max(
+                lastDueFireDate(for: alarm, now: now) ?? .distantPast,
+                now.addingTimeInterval(-TimeInterval(minutes * 60))
+            )
+            event.recordSnooze(
+                minutes: minutes,
+                source: .countdown,
+                at: earliest,
+                isApproximate: true
+            )
+            alarm.snoozedUntil = now.addingTimeInterval(TimeInterval(minutes * 60))
+
+            await LogService.shared.log(
+                .alarmkit,
+                "detectCountdownSnoozes: recorded countdown snooze (count now \(event.snoozeCount))",
+                alarmId: alarm.id.uuidString
+            )
+        }
+    }
+
+    /// Record firings nothing ever engaged with.
+    ///
+    /// There is deliberately **no time threshold** here. The old
+    /// `missedGraceMinutes` was a proxy for "is this chain still in flight?",
+    /// and we can read the real signal instead: AlarmKit's state, available
+    /// synchronously. Every threshold tried was arbitrary — 30 minutes was
+    /// 30 minutes, and the 15-minute ring duration turned out to mark only
+    /// when the *sound* stops, while the alert stays on screen and engageable.
+    ///
+    /// The verdict comes from state plus the firing's lifecycle:
+    ///
+    ///   .countdown  the user snoozed ⇒ engaged, never ignored, however long
+    ///   .alerting   still open, but reconcile is about to end it (the
+    ///               untracked sweep, or the user dealing with it) ⇒ ignored
+    ///               if nothing engaged
+    ///   .scheduled  the firing is over ⇒ ignored if nothing engaged
+    ///
+    /// An `ignored` verdict is not final: `AlarmEvent.openChain` adopts and
+    /// reopens it if the user engages afterwards. Recording early is safe
+    /// because the ledger can change its mind.
     private func recordMissedFirings(alarms: [Alarm], context: ModelContext) async {
         let now = Date()
+        let statesById: [UUID: AKAlarm.State]
+        if let live = try? manager.alarms {
+            statesById = Dictionary(live.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        } else {
+            statesById = [:]
+        }
+
         for alarm in alarms {
             guard alarm.enabled else { continue }
             // A live snooze means the chain is still in flight — not missed.
@@ -378,15 +503,24 @@ final class AlarmKitService {
             guard let due = lastDueFireDate(for: alarm, now: now) else { continue }
             guard due > alarm.createdAt else { continue }
 
-            let graceEnd = due.addingTimeInterval(TimeInterval(Constants.missedGraceMinutes) * 60)
+            // Still bounded on the far side: don't backfill ancient firings.
             let lookbackEnd = due.addingTimeInterval(TimeInterval(Constants.missedLookbackHours) * 3600)
-            guard now > graceEnd, now < lookbackEnd else { continue }
+            guard now < lookbackEnd else { continue }
 
             // Any event at/after (or shortly before) the due time — pending,
             // resolved, or an earlier "ignored" from a previous pass — means
             // this firing is already accounted for.
             let window = due.addingTimeInterval(-3600)
             if alarm.events.contains(where: { $0.firedAt > window }) { continue }
+
+            // A countdown in progress is engagement. detectCountdownSnoozes
+            // runs first and normally creates the event, so this is a
+            // belt-and-braces guard against ever calling a snooze a miss.
+            let ids = Set(
+                (alarm.alarmKitIdStrings + [alarm.pendingSnoozeIdString].compactMap { $0 })
+                    .compactMap(UUID.init(uuidString:))
+            )
+            if ids.contains(where: { statesById[$0] == .countdown }) { continue }
 
             let missed = AlarmEvent(alarm: alarm)
             missed.firedAt = due
