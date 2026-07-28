@@ -532,3 +532,316 @@ sqlite3 <dest>/default.store "SELECT datetime(ZTIMESTAMP + 978307200,'unixepoch'
 
 Sanity-check every pull: compare `MAX(ZTIMESTAMP)` against the wall clock
 before drawing conclusions from an absence of rows.
+
+---
+
+# Acceptance criteria
+
+Written to be executed by an agent working a goal loop with no prior context
+on this project. Every criterion is either a shell command with a stated pass
+condition, or a **[HUMAN]** step with an exact script. Do not mark a criterion
+met on inspection or reasoning — run the command and read the output.
+
+## Definitions
+
+```sh
+REPO=~/Claude/projects/accountability-alarm
+WT=~/Claude/.claude/worktrees/accountability-alarm-coach-time
+PROJ="$WT/AccountabilityAlarm/AccountabilityAlarm.xcodeproj"
+SRC="$WT/AccountabilityAlarm/AccountabilityAlarm"
+DD=<scratch>/dd            # derived data, any writable scratch dir
+STORE=<scratch>/store      # pulled device store
+UDID=$(xcrun devicectl list devices | awk '/bPhone2/{print $3}')
+```
+
+`pull-store` — used by every device criterion. **Always pull all three files**;
+the bare `.store` is checkpointed and can be hours stale.
+
+```sh
+pull-store() {
+  rm -f "$STORE"/default.store*
+  mkdir -p "$STORE"
+  for ext in "" "-wal" "-shm"; do
+    xcrun devicectl device copy from --device "$UDID" \
+      --domain-type appDataContainer \
+      --domain-identifier com.blaizew.AccountabilityAlarm \
+      --source "Library/Application Support/default.store$ext" \
+      --destination "$STORE/default.store$ext" >/dev/null 2>&1
+  done
+  sqlite3 "$STORE/default.store" \
+    "SELECT datetime(MAX(ZTIMESTAMP)+978307200,'unixepoch','localtime') FROM ZALARMLOGENTRY;"
+}
+```
+
+`log-tail`:
+
+```sh
+log-tail() {
+  sqlite3 -separator '  ' "$STORE/default.store" \
+    "SELECT datetime(ZTIMESTAMP+978307200,'unixepoch','localtime'), ZCATEGORYRAW, ZMESSAGE
+     FROM ZALARMLOGENTRY ORDER BY ZTIMESTAMP DESC LIMIT ${1:-40};" | sort
+}
+```
+
+**Stale-pull guard.** After every `pull-store`, compare its printed timestamp
+to `date`. If the newest row is older than the action just performed, the pull
+is stale — re-pull. An absence of rows is never evidence until this passes.
+
+## Hard prohibitions
+
+Violating any of these fails the whole run regardless of other criteria.
+
+- **AC-X1** Never `rm`, reset, truncate, or overwrite the device store. It
+  holds real alarms and history.
+- **AC-X2** Never `xcrun devicectl device uninstall`. Install over the top;
+  uninstalling wipes SwiftData.
+- **AC-X3** Never `git push`, open a PR, or deploy. Landing is a human
+  decision.
+- **AC-X4** Never commit `APIKeys.swift`. It is gitignored; if absent from the
+  worktree, copy it from `$REPO` and confirm `git check-ignore` still matches.
+- **AC-X5** All work happens in `$WT`, never in `$REPO`'s working tree.
+
+## Phase 0 — environment
+
+- **AC-0.1** `git -C "$WT" rev-parse --abbrev-ref HEAD` prints `wt/coach-time`.
+- **AC-0.2** `ls "$SRC/APIKeys.swift"` succeeds, and
+  `git -C "$WT" check-ignore -q AccountabilityAlarm/AccountabilityAlarm/APIKeys.swift`
+  exits 0.
+- **AC-0.3** Baseline device build succeeds before any edit:
+  ```sh
+  xcodebuild -project "$PROJ" -scheme AccountabilityAlarm \
+    -destination "platform=iOS,id=$UDID" -allowProvisioningUpdates \
+    -derivedDataPath "$DD" build 2>&1 | grep -c "BUILD SUCCEEDED"
+  ```
+  prints `1`.
+- **AC-0.4** `$UDID` is non-empty and `xcrun devicectl list devices` shows
+  bPhone2 `available (paired)`.
+
+## Phase 1 — §3 data layer
+
+- **AC-1.1** `SnoozeRecord` exists with stored properties `at: Date`,
+  `minutes: Int`, `source: Source`, and `Source` declares exactly four cases:
+  `countdown`, `snoozeButton`, `coach`, `safetyNet`.
+  ```sh
+  grep -c "case countdown\|case snoozeButton\|case coach\|case safetyNet" "$SRC"/Models/SnoozeRecord.swift
+  ```
+  prints `4`.
+- **AC-1.2** `AlarmEvent` exposes `snoozeLogData: Data?` and a computed
+  `snoozeLog: [SnoozeRecord]` that round-trips through JSON, matching the
+  existing `conversationLogData` / `conversationLog` pattern.
+- **AC-1.3** `AlarmEvent.recordSnooze(minutes:source:)` exists and, in one
+  call, both increments `snoozeCount` by exactly 1 and appends exactly one
+  `SnoozeRecord`.
+- **AC-1.4 (regression guard)** No direct mutation of `snoozeCount` survives
+  outside `recordSnooze`:
+  ```sh
+  grep -rn "snoozeCount *+= *1\|snoozeCount *= *snoozeCount" "$SRC" | grep -v "func recordSnooze" | wc -l
+  ```
+  prints `0`. The three former sites — `Intents/SnoozeStopIntent.swift`,
+  `ViewModels/ConversationViewModel.swift` (`resolveSnooze`, `snooze_alarm`
+  dispatch) — must all route through `recordSnooze`.
+- **AC-1.5** Compile-only build succeeds:
+  ```sh
+  xcodebuild -project "$PROJ" -scheme AccountabilityAlarm \
+    -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO \
+    -derivedDataPath "$DD" build 2>&1 | grep -c "BUILD SUCCEEDED"
+  ```
+  prints `1`.
+
+## Phase 2 — §3 detection and reconcile
+
+**Mechanism is not prescribed** — the observer is `nonisolated`/detached and
+has no `ModelContext`, and transition state does not survive a cold launch, so
+detection will most likely live in the `@MainActor` reconcile path keyed on
+*current* state rather than on an observed transition. Any mechanism that
+satisfies the behavioural criteria below is acceptable.
+
+- **AC-2.1** `Constants.missedGraceMinutes` is deleted and unreferenced:
+  ```sh
+  grep -rn "missedGraceMinutes" "$SRC" | wc -l
+  ```
+  prints `0`.
+- **AC-2.2** `Constants.missedLookbackHours` still exists and is still
+  referenced (it keeps its separate job).
+- **AC-2.3** `stopAllActive` no longer calls `stopAnyAlerting()`. The broad
+  sweep remains reachable **only** from the orphan path in
+  `reconcileOnAppOpen`.
+  ```sh
+  awk '/func stopAllActive/,/^    }/' "$SRC"/Services/AlarmKitService.swift | grep -c stopAnyAlerting
+  ```
+  prints `0`.
+- **AC-2.4** `AlarmEvent.openChain` matches a recent `ignored` event for the
+  same firing and reopens it as `pending`, rather than inserting a second
+  event. Verified behaviourally by AC-3.4.
+- **AC-2.5 (ordering)** Countdown-snooze detection runs **before**
+  `recordMissedFirings` inside `reconcileOnAppOpen`. Verify by line order:
+  ```sh
+  awk '/func reconcileOnAppOpen/,/^    }/' "$SRC"/Services/AlarmKitService.swift \
+    | grep -n "detectCountdownSnoozes\|recordMissedFirings"
+  ```
+  the detection call's line number must be strictly lower. Behaviourally
+  guarded by AC-3.3.
+- **AC-2.6** Reconcile implements exactly this table, with no time threshold:
+
+  | State at app open | No event near due ⇒ |
+  | --- | --- |
+  | `.countdown` | engaged — create/keep chain, never ignored |
+  | `.alerting` | record `ignored` at the point reconcile clears it |
+  | `.scheduled` | record `ignored` |
+
+- **AC-2.7** Build succeeds (repeat AC-1.5 and AC-0.3).
+
+## Phase 3 — device verification of §3  **[HUMAN]**
+
+Install first:
+
+```sh
+xcrun devicectl device install app --device "$UDID" \
+  "$DD/Build/Products/Debug-iphoneos/AccountabilityAlarm.app"
+```
+
+- **AC-3.1 — Test A, countdown snooze is recorded. [HUMAN]**
+  Script: set an alarm ~2 min out; background the app (home-swipe, **not**
+  force-quit); let it ring; tap "Snooze 5 min"; wait 10s; reopen the app.
+  Then `pull-store`, and:
+  ```sh
+  sqlite3 -separator '  ' "$STORE/default.store" \
+    "SELECT datetime(ZFIREDAT+978307200,'unixepoch','localtime'), ZOUTCOME, ZSNOOZECOUNT
+     FROM ZALARMEVENT ORDER BY ZFIREDAT DESC LIMIT 1;"
+  ```
+  **Pass:** exactly one new event for today, `ZOUTCOME='pending'`,
+  `ZSNOOZECOUNT>=1`, and its `snoozeLog` decodes to at least one record with
+  `source == "countdown"`.
+
+- **AC-3.2 — approximate timestamps. [HUMAN, same run as AC-3.1]**
+  The `countdown` record's `at` falls within
+  `[max(scheduledRingTime, observation − 300s), observation]`, and the §2
+  timeline renders it prefixed `~`.
+
+- **AC-3.3 — Test C, no false "ignored" past 30 minutes. [HUMAN]**
+  Script: set an alarm ~2 min out; background the app; let it ring; tap
+  "Snooze 5 min" **seven times** across the re-rings, so more than 30 minutes
+  elapse from the original due time; do **not** open the app until after the
+  seventh; then open it. `pull-store`, and:
+  ```sh
+  sqlite3 -separator '  ' "$STORE/default.store" \
+    "SELECT datetime(ZFIREDAT+978307200,'unixepoch','localtime'), ZOUTCOME, ZSNOOZECOUNT
+     FROM ZALARMEVENT WHERE ZFIREDAT > strftime('%s','now','-3 hours') - 978307200;"
+  ```
+  **Pass:** exactly **one** row. `ZOUTCOME='pending'`. `ZSNOOZECOUNT` equals
+  the number of taps. **No row with `ZOUTCOME='ignored'`.**
+  This is the criterion that catches the AC-2.5 ordering hazard; a wrong
+  ordering yields two rows, one `ignored`, while the app's own UI still looks
+  correct.
+
+- **AC-3.4 — ignored is revisable. [HUMAN]**
+  Script: set an alarm ~2 min out; let it ring and touch nothing for ~16 min
+  (past the ring duration); open the app (this records `ignored`); then, from
+  inside the app, open the Coach for that alarm and send one message.
+  `pull-store`. **Pass:** exactly **one** event row for that firing, now
+  `ZOUTCOME='pending'` — the `ignored` verdict was adopted and reopened, not
+  duplicated.
+
+- **AC-3.5 — cross-alarm isolation. [HUMAN]**
+  Script: set alarm A ~2 min out and alarm B ~5 min out; let A ring and leave
+  it; when B rings, slide-to-stop on B and talk to its Coach.
+  **Pass:** A is still audibly ringing after B's conversation opens. Then
+  `pull-store` and confirm A's firing eventually records `ignored` only after
+  A itself is cleared.
+
+## Phase 4 — §1/§2 prompt content
+
+`buildTimeContext` output is not otherwise observable without a test target,
+so during implementation it is logged once per conversation open under a
+`PROBE timeContext:` prefix, removed with the other probes in Phase 7.
+
+- **AC-4.1** `ConversationEngine.buildTimeContext(alarm:event:now:)` exists
+  with `now` as an injected parameter defaulting to `Date()`.
+- **AC-4.2 [HUMAN]** After opening any conversation, `log-tail` contains a
+  `PROBE timeContext:` line that includes: a `CURRENT TIME:` line matching the
+  wall clock at open; one timeline row per `snoozeLog` entry in ascending time
+  order; and the instruction not to convert clock times manually.
+- **AC-4.3** When `snoozeCount > snoozeLog.count`, the timeline includes a
+  line accounting for the difference (unmigrated legacy events) rather than
+  implying completeness.
+
+## Phase 5 — §4/§5 snooze resolution
+
+`SnoozeResolver` is pure but the project has no test target. Add a temporary
+`SnoozeResolverSelfCheck` that runs once at launch and logs one
+`PROBE resolver: <case> PASS|FAIL` line per case, removed in Phase 7.
+
+- **AC-5.1** All self-check cases pass:
+  ```sh
+  sqlite3 "$STORE/default.store" \
+    "SELECT COUNT(*) FROM ZALARMLOGENTRY WHERE ZMESSAGE LIKE 'PROBE resolver:%FAIL%';"
+  ```
+  prints `0`, and the count of `PROBE resolver:` rows is ≥ the case count below.
+- **AC-5.2** Required cases, with `now` injected:
+
+  | `now` | input | expected |
+  | --- | --- | --- |
+  | 21:42 | `until="22:00"` | 18 min, returns 22:00 |
+  | 23:50 | `until="06:00"` | 370 min → **clamped to 30**, `requested` populated |
+  | 21:42 | `minutes=8` | 8 min, returns 21:50 |
+  | 21:42 | `until="21:42"` | floored to 1 min, never 0 or negative |
+  | 21:42 | `until="23:00"` | 78 min → clamped to 30, `requested` populated |
+  | 21:42 | neither supplied | `.invalid` |
+  | 21:42 | both supplied | `.invalid` |
+  | 21:42 | `until="banana"` | `.invalid` |
+
+- **AC-5.3** `Constants.maxSnoozeMinutes` exists, equals 30, and both tool
+  schemas reference it rather than a literal.
+- **AC-5.4** Both `snooze_alarm` and `set_snooze_duration` declare `minutes`
+  and `until`, with `required` empty; the dispatcher returns an `is_error`
+  tool result for the neither/both/unparseable cases.
+- **AC-5.5** Tool results state the absolute return time. The dispatcher logs
+  its result string; `log-tail` after a snooze shows a line matching
+  `Snoozed [0-9]+ minutes — alarm returns at .*(AM|PM)`.
+- **AC-5.6** A clamped call's tool result names **both** numbers — what was
+  asked for and what was granted — and instructs the model to tell the user.
+- **AC-5.7 [HUMAN] — Test D, the original incident.** Let an alarm ring,
+  snooze twice, open the Coach ≥10 min after the scheduled time, and ask for
+  "until 10". **Pass:** `log-tail` shows the scheduled snooze resolving to
+  `(22:00 − now)` minutes, not `(22:00 − scheduledAlarmTime)`. With a 21:30
+  alarm and a 21:42 conversation, that is **18**, not 30.
+
+## Phase 6 — §6 transcript stamping
+
+- **AC-6.1** `reFireTrigger` renders each prior message as
+  `USER [h:mm AM/PM]:` / `COACH [h:mm AM/PM]:` using
+  `ConversationMessage.timestamp`.
+- **AC-6.2** Synthetic triggers are stamped: `[alarm fired at h:mm AM/PM]`,
+  `[alarm re-fired after snooze at h:mm AM/PM]`.
+- **AC-6.3** Live **user** messages are stamped only on the copy appended to
+  `apiMessages`. Assistant live turns are **not** stamped.
+- **AC-6.4 (regression guard)** On-screen and persisted text stays clean:
+  ```sh
+  sqlite3 "$STORE/default.store" \
+    "SELECT COUNT(*) FROM ZALARMLOGENTRY WHERE ZCATEGORYRAW='conversation'
+     AND ZMESSAGE LIKE 'user: [%:%]%';"
+  ```
+  prints `0`. The stamp must not reach `messages` or `conversationLog`.
+
+## Phase 7 — cleanup and close
+
+- **AC-7.1** All temporary instrumentation is removed:
+  ```sh
+  grep -rn "PROBE\|TEMPORARY INSTRUMENTATION\|probeCurrentAlarmStates\|SnoozeResolverSelfCheck" "$SRC" | wc -l
+  ```
+  prints `0`.
+- **AC-7.2** Final device build and install succeed; the app launches and
+  `log-tail` shows `app didFinishLaunching` with no `isError=1` rows from the
+  launch pass.
+- **AC-7.3** `git -C "$WT" status --short` shows no modified tracked files
+  (everything committed) and no untracked file other than `APIKeys.swift`.
+- **AC-7.4** Re-run AC-1.4, AC-2.1, AC-2.3, AC-6.4 — all still pass after
+  cleanup.
+- **AC-7.5** Stop. Do not push, merge, or deploy; report status and wait.
+
+## Definition of done
+
+All of AC-0.*, AC-1.*, AC-2.*, AC-4.*, AC-5.1–5.6, AC-6.*, AC-7.* pass
+automatically, **and** the six `[HUMAN]` criteria — AC-3.1, AC-3.2, AC-3.3,
+AC-3.4, AC-3.5, AC-4.2, AC-5.7 — have been run on bPhone2 with their outputs
+recorded. A criterion with no recorded command output is not met.
