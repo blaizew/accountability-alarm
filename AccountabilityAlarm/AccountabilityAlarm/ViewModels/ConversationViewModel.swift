@@ -125,14 +125,6 @@ final class ConversationViewModel {
             // escape the alarm by backgrounding the app.
             await rescheduleSnooze(context: context, minutes: Constants.conversationSafetyNetMinutes)
 
-            // TEMPORARY INSTRUMENTATION (spec AC-4.2). The prompt is not
-            // otherwise observable without a test target. Removed in Phase 7.
-            await LogService.shared.log(
-                .conversation,
-                "PROBE timeContext:\n" + engine.buildTimeContext(alarm: alarm, event: event),
-                alarmId: alarm.id.uuidString
-            )
-
             // Ask the LLM to generate the opening check-in. Personalized to
             // the user's recorded reason, framed as a concrete question.
             await runAssistantTurn(context: context)
@@ -535,7 +527,7 @@ final class ConversationViewModel {
     /// relative, and it was that gap the user fell through. When the ask was
     /// clamped, both numbers are named and the Coach is told to say so, so it
     /// can never promise a return time the alarm won't honour.
-    static func snoozeResultText(
+    private static func snoozeResultText(
         verb: String,
         minutes: Int,
         returnsAt: Date,
