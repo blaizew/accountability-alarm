@@ -535,7 +535,7 @@ final class ConversationViewModel {
     /// relative, and it was that gap the user fell through. When the ask was
     /// clamped, both numbers are named and the Coach is told to say so, so it
     /// can never promise a return time the alarm won't honour.
-    private static func snoozeResultText(
+    static func snoozeResultText(
         verb: String,
         minutes: Int,
         returnsAt: Date,

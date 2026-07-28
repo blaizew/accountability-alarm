@@ -81,6 +81,27 @@ enum SnoozeResolverSelfCheck {
         expectInvalid("unparseable until",
                       SnoozeResolver.resolve(minutes: nil, until: "banana", now: t2142))
 
+        // AC-5.5 / AC-5.6 — the tool result the model actually reads.
+        do {
+            let plain = await ConversationViewModel.snoozeResultText(
+                verb: "Snoozed", minutes: 18, returnsAt: at(22, 0), requested: nil
+            )
+            let statesReturnTime = plain.contains("Snoozed 18 minutes — alarm returns at 10:00 PM")
+            results.append(("AC-5.5 result states absolute return time", statesReturnTime, plain))
+
+            let clamped = await ConversationViewModel.snoozeResultText(
+                verb: "Snoozed", minutes: 30, returnsAt: at(22, 12),
+                requested: (minutes: 78, at: at(23, 0))
+            )
+            // Must name BOTH numbers and tell the Coach to say so — a clamp the
+            // user isn't told about is the same failure in a new costume.
+            let namesBoth = clamped.contains("78 min")
+                && clamped.contains("10:12 PM")
+                && clamped.contains("11:00 PM")
+                && clamped.lowercased().contains("tell the user")
+            results.append(("AC-5.6 clamped result names both numbers", namesBoth, clamped))
+        }
+
         for (name, passed, detail) in results {
             await LogService.shared.log(
                 .app,
