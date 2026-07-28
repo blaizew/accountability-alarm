@@ -24,6 +24,12 @@ enum Constants {
     // alarm-screen snoozes stopped creating events, and the alert's 15-minute
     // ring duration marks only when the sound stops, not when the firing ends.
 
+    /// Ceiling on any single snooze, in minutes. Also the `maximum` in both
+    /// snooze tool schemas. A request past this is clamped and the Coach is
+    /// told to say so — silently granting less than asked is the class of bug
+    /// this whole feature exists to remove.
+    static let maxSnoozeMinutes = 30
+
     /// Missed-firing detection: only the most recent scheduled firing within
     /// this lookback is considered. Bounds the error window for one-shot
     /// alarms, whose original fire date we can only approximate.

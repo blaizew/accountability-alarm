@@ -103,7 +103,7 @@ final class ConversationViewModel {
             // system prompt has explicit instructions for handling it:
             // respond with a specific check-in question grounded in the
             // user's recorded reason.
-            apiMessages.append(.init(role: "user", text: "[alarm fired]"))
+            apiMessages.append(.init(role: "user", text: "[alarm fired at \(ConversationEngine.clock(Date()))]"))
         }
 
         Task { @MainActor in
@@ -124,6 +124,14 @@ final class ConversationViewModel {
             // as the system Stop button — so the user can't accidentally
             // escape the alarm by backgrounding the app.
             await rescheduleSnooze(context: context, minutes: Constants.conversationSafetyNetMinutes)
+
+            // TEMPORARY INSTRUMENTATION (spec AC-4.2). The prompt is not
+            // otherwise observable without a test target. Removed in Phase 7.
+            await LogService.shared.log(
+                .conversation,
+                "PROBE timeContext:\n" + engine.buildTimeContext(alarm: alarm, event: event),
+                alarmId: alarm.id.uuidString
+            )
 
             // Ask the LLM to generate the opening check-in. Personalized to
             // the user's recorded reason, framed as a concrete question.
@@ -161,11 +169,19 @@ final class ConversationViewModel {
     /// Trigger message for a re-ring within an open chain. Carries the
     /// chain's transcript so the LLM can reference what the user actually
     /// said before snoozing ("at 7:05 you said five more minutes").
-    private static func reFireTrigger(prior: [ConversationMessage]) -> String {
-        guard !prior.isEmpty else { return "[alarm fired]" }
-        var lines = ["[alarm re-fired after snooze]", "", "Transcript from earlier in this wake-up chain:"]
+    private static func reFireTrigger(prior: [ConversationMessage], now: Date = Date()) -> String {
+        guard !prior.isEmpty else { return "[alarm fired at \(ConversationEngine.clock(now))]" }
+        var lines = [
+            "[alarm re-fired after snooze at \(ConversationEngine.clock(now))]",
+            "",
+            "Transcript from earlier in this wake-up chain:"
+        ]
+        // Both roles are stamped here, unlike live turns: this is quoted
+        // transcript inside a user message, clearly framed as a record, so
+        // there's no risk of the model copying the format into its own replies.
         for m in prior {
-            lines.append("\(m.role == .assistant ? "COACH" : "USER"): \(m.content)")
+            let who = m.role == .assistant ? "COACH" : "USER"
+            lines.append("\(who) [\(ConversationEngine.clock(m.timestamp))]: \(m.content)")
         }
         return lines.joined(separator: "\n")
     }
@@ -186,15 +202,23 @@ final class ConversationViewModel {
         messages.append(uiMessage)
         inputText = ""
 
+        // Stamp ONLY the copy the API sees. The system prompt's "now" refreshes
+        // each turn, so without this the Coach can't tell a five-second reply
+        // from a five-minute one. Assistant turns are deliberately left
+        // unstamped — rewriting the model's own words back into history teaches
+        // it to emit "[9:42 PM]" in user-visible replies, and the gap between
+        // consecutive user stamps already shows the pacing.
+        let stampedText = "[\(ConversationEngine.clock(uiMessage.timestamp))] \(text)"
+
         var blocks: [ClaudeAPIService.ContentBlock] = []
         if !pendingToolResults.isEmpty {
             blocks.append(contentsOf: pendingToolResults)
             pendingToolResults.removeAll()
         }
-        blocks.append(.text(text))
+        blocks.append(.text(stampedText))
 
         if blocks.count == 1, case .text = (blocks[0].text.map(ClaudeAPIService.MessageContent.text) ?? .text("")) {
-            apiMessages.append(.init(role: "user", text: text))
+            apiMessages.append(.init(role: "user", text: stampedText))
         } else {
             apiMessages.append(.init(role: "user", blocks: blocks))
         }
@@ -389,17 +413,41 @@ final class ConversationViewModel {
             queueToolResult(id: tool.id, content: "DOING IT button unlocked. The alarm chain stops only when the user taps it — if they keep talking instead of tapping, they haven't followed through yet.")
 
         case "set_snooze_duration":
-            let requested = tool.input["minutes"]?.int ?? 3
             let before = snoozeButtonMinutes
-            snoozeButtonMinutes = max(1, min(30, requested))
-            await LogService.shared.log(
-                .conversation,
-                "set_snooze_duration: requested=\(requested) before=\(before) after=\(snoozeButtonMinutes)",
-                alarmId: alarm?.id.uuidString
+            let resolution = SnoozeResolver.resolve(
+                minutes: tool.input["minutes"]?.int,
+                until: tool.input["until"]?.string
             )
-            // Only changes the user-facing Snooze button. The pre-emptive
-            // safety-net "you didn't engage" timer is separate and not affected.
-            queueToolResult(id: tool.id, content: "Snooze button set to \(snoozeButtonMinutes) minutes.")
+            switch resolution {
+            case let .invalid(message):
+                await LogService.shared.log(
+                    .conversation,
+                    "set_snooze_duration: invalid — \(message)",
+                    alarmId: alarm?.id.uuidString,
+                    isError: true
+                )
+                queueToolResult(id: tool.id, content: message, isError: true)
+
+            case let .ok(minutes, returnsAt, requested):
+                snoozeButtonMinutes = minutes
+                await LogService.shared.log(
+                    .conversation,
+                    "set_snooze_duration: before=\(before) after=\(minutes)"
+                        + (requested.map { " (clamped from \($0.minutes))" } ?? ""),
+                    alarmId: alarm?.id.uuidString
+                )
+                // Only changes the user-facing Snooze button. The pre-emptive
+                // safety-net "you didn't engage" timer is separate.
+                queueToolResult(
+                    id: tool.id,
+                    content: Self.snoozeResultText(
+                        verb: "Snooze button set to",
+                        minutes: minutes,
+                        returnsAt: returnsAt,
+                        requested: requested
+                    )
+                )
+            }
 
         case "mark_overridden":
             let reason = tool.input["reason"]?.string ?? "(no reason)"
@@ -413,15 +461,52 @@ final class ConversationViewModel {
                 queueToolResult(id: tool.id, content: "Alarm already resolved — no snooze scheduled.", isError: true)
                 break
             }
-            let minutes = tool.input["minutes"]?.int ?? snoozeButtonMinutes
-            await LogService.shared.log(.conversation, "snooze_alarm: \(minutes) min", alarmId: alarm?.id.uuidString)
-            await rescheduleSnooze(context: context, minutes: minutes)
-            event?.recordSnooze(minutes: minutes, source: .coach)
-            alarmSoundState = .stopped
-            queueToolResult(id: tool.id, content: "Snoozed for \(minutes) minutes.")
-            autoDismissOnCompletion = true
-            isCompleted = true
-            saveConversation(context: context)
+            let hasAny = tool.input["minutes"]?.int != nil || tool.input["until"]?.string != nil
+            let resolution = hasAny
+                ? SnoozeResolver.resolve(
+                    minutes: tool.input["minutes"]?.int,
+                    until: tool.input["until"]?.string
+                  )
+                // Neither given: fall back to the button's current duration
+                // rather than refusing — the user is already owed a snooze.
+                : SnoozeResolver.resolve(minutes: snoozeButtonMinutes, until: nil)
+
+            switch resolution {
+            case let .invalid(message):
+                await LogService.shared.log(
+                    .conversation,
+                    "snooze_alarm: invalid — \(message)",
+                    alarmId: alarm?.id.uuidString,
+                    isError: true
+                )
+                queueToolResult(id: tool.id, content: message, isError: true)
+
+            case let .ok(minutes, returnsAt, requested):
+                await LogService.shared.log(
+                    .conversation,
+                    "snooze_alarm: \(minutes) min, returns \(ConversationEngine.clock(returnsAt))"
+                        + (requested.map { " (clamped from \($0.minutes))" } ?? ""),
+                    alarmId: alarm?.id.uuidString
+                )
+                await rescheduleSnooze(context: context, minutes: minutes)
+                event?.recordSnooze(minutes: minutes, source: .coach)
+                alarmSoundState = .stopped
+                let resultText = Self.snoozeResultText(
+                    verb: "Snoozed",
+                    minutes: minutes,
+                    returnsAt: returnsAt,
+                    requested: requested
+                )
+                await LogService.shared.log(
+                    .conversation,
+                    "tool result: \(resultText)",
+                    alarmId: alarm?.id.uuidString
+                )
+                queueToolResult(id: tool.id, content: resultText)
+                autoDismissOnCompletion = true
+                isCompleted = true
+                saveConversation(context: context)
+            }
 
         default:
             await LogService.shared.log(.conversation, "unknown tool: \(tool.name)", alarmId: alarm?.id.uuidString, isError: true)
@@ -441,6 +526,28 @@ final class ConversationViewModel {
         // Cap at 200 chars so a runaway prompt doesn't blow up the log row.
         if str.count > 200 { return String(str.prefix(200)) + "…" }
         return str
+    }
+
+    /// Tool result text for a resolved snooze.
+    ///
+    /// Always states the absolute return time — a relative "Snoozed 18
+    /// minutes" leaves the Coach able to tell the user only something
+    /// relative, and it was that gap the user fell through. When the ask was
+    /// clamped, both numbers are named and the Coach is told to say so, so it
+    /// can never promise a return time the alarm won't honour.
+    private static func snoozeResultText(
+        verb: String,
+        minutes: Int,
+        returnsAt: Date,
+        requested: (minutes: Int, at: Date)?
+    ) -> String {
+        let base = "\(verb) \(minutes) minutes — alarm returns at \(ConversationEngine.clock(returnsAt))."
+        guard let requested else { return base }
+        return """
+        Requested \(ConversationEngine.clock(requested.at)) = \(requested.minutes) min, \
+        over the \(Constants.maxSnoozeMinutes) min cap. \(base) \
+        Not \(ConversationEngine.clock(requested.at)). Tell the user this explicitly.
+        """
     }
 
     private func queueToolResult(id: String, content: String, isError: Bool = false) {

@@ -29,11 +29,14 @@ final class ConversationEngine {
         .init(
             name: "set_snooze_duration",
             description: """
-                Set how many minutes the Snooze button will snooze for when the user taps \
-                it. The button is always visible to the user; its current duration is \
-                stated in the system prompt. Only raise it if the user gives you a \
-                concrete reason ("I'm finishing this email, give me 8"). Vague requests \
-                for "longer" should be pushed back on. \
+                Set how long the Snooze button will snooze for when the user taps it. \
+                The button is always visible; its current duration is stated in the \
+                system prompt. Only raise it if the user gives you a concrete reason \
+                ("I'm finishing this email, give me 8"). Vague requests for "longer" \
+                should be pushed back on. \
+                Supply EITHER `minutes` OR `until`, never both and never neither. \
+                If the user names a clock time, use `until` — do NOT do the arithmetic \
+                yourself. \
                 This does NOT snooze the alarm — use snooze_alarm for that.
                 """,
             input_schema: .object([
@@ -42,11 +45,14 @@ final class ConversationEngine {
                     "minutes": .object([
                         "type": .string("integer"),
                         "minimum": .int(1),
-                        "maximum": .int(30),
-                        "description": .string("New duration for the Snooze button, in minutes.")
+                        "maximum": .int(Constants.maxSnoozeMinutes),
+                        "description": .string("New duration for the Snooze button, in minutes from now.")
+                    ]),
+                    "until": .object([
+                        "type": .string("string"),
+                        "description": .string("Local clock time to ring at, 24-hour \"HH:mm\" (e.g. \"22:00\" for 10 PM). The app converts this to a duration using the current time.")
                     ])
-                ]),
-                "required": .array([.string("minutes")])
+                ])
             ])
         ),
         .init(
@@ -60,7 +66,11 @@ final class ConversationEngine {
                 "I'm finishing this email, give me 8"). Vague hedging is not a reason. \
                 Long snoozes (>15 min) are usually disguised overrides and should be \
                 rare. The user cannot manually stop the alarm — they get the snooze \
-                you choose.
+                you choose. \
+                Supply EITHER `minutes` OR `until`, never both and never neither. \
+                When the user names a clock time ("until 10", "by 10:15"), pass it as \
+                `until` — do NOT convert it to minutes yourself. You will be told the \
+                exact duration and the absolute return time in the tool result.
                 """,
             input_schema: .object([
                 "type": .string("object"),
@@ -68,15 +78,18 @@ final class ConversationEngine {
                     "minutes": .object([
                         "type": .string("integer"),
                         "minimum": .int(1),
-                        "maximum": .int(30),
+                        "maximum": .int(Constants.maxSnoozeMinutes),
                         "description": .string("How many minutes from now to ring again.")
+                    ]),
+                    "until": .object([
+                        "type": .string("string"),
+                        "description": .string("Local clock time to ring at, 24-hour \"HH:mm\" (e.g. \"22:00\" for 10 PM). The app converts this to a duration using the current time.")
                     ]),
                     "user_committed": .object([
                         "type": .string("boolean"),
                         "description": .string("True if the user named a specific time/action they'll take when the snooze ends.")
                     ])
-                ]),
-                "required": .array([.string("minutes")])
+                ])
             ])
         ),
         .init(
@@ -105,9 +118,81 @@ final class ConversationEngine {
         )
     ]
 
+    // MARK: - Time context
+
+    /// Clock time, e.g. "9:42 PM".
+    static func clock(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f.string(from: date)
+    }
+
+    /// The TIME block: what time it is now, and everything that has happened
+    /// in this wake-up chain, stamped.
+    ///
+    /// Without this the Coach's only time anchor is the alarm's *scheduled*
+    /// time — which is how "give me until 10" at 9:42 became a 30-minute
+    /// snooze: correct arithmetic from 9:30, and 12 minutes too long.
+    ///
+    /// `now` is injected so the output can be checked against fixed inputs.
+    func buildTimeContext(alarm: Alarm, event: AlarmEvent?, now: Date = Date()) -> String {
+        let dayFmt = DateFormatter()
+        dayFmt.dateFormat = "EEEE MMMM d"
+
+        var lines = [
+            "CURRENT TIME: \(Self.clock(now)), \(dayFmt.string(from: now)) (\(TimeZone.current.identifier))",
+            "",
+            "TIMELINE (this wake-up chain):",
+            "  \(alarm.timeString)   alarm scheduled"
+        ]
+
+        // (sortKey, rendered) so the "rang" row interleaves with snoozes by
+        // time rather than being pinned above them.
+        var rows: [(Date, String)] = []
+
+        if let firedAt = event?.firedAt {
+            rows.append((firedAt, "  \(Self.clock(firedAt))   alarm rang — chain started"))
+        }
+        for record in event?.snoozeLog ?? [] {
+            let stamp = record.isApproximate ? "~\(Self.clock(record.at))" : " \(Self.clock(record.at))"
+            rows.append((record.at, " \(stamp)   snoozed \(record.minutes) min (\(record.sourceDescription))"))
+        }
+        rows.sort { $0.0 < $1.0 }
+        lines.append(contentsOf: rows.map(\.1))
+
+        if let event, event.unrecordedSnoozeCount > 0 {
+            lines.append("  (\(event.unrecordedSnoozeCount) earlier snooze(s), times not recorded)")
+        }
+
+        var nowLine = "  \(Self.clock(now))   ← now"
+        if let firedAt = event?.firedAt {
+            let mins = Int(now.timeIntervalSince(firedAt) / 60)
+            if mins > 0 { nowLine += ", \(mins) min past the alarm" }
+        }
+        lines.append(nowLine)
+
+        lines.append("")
+        lines.append("""
+        A leading "~" means that time is approximate — the snooze happened while \
+        the app was closed, so it is known only to within a few minutes.
+
+        All times are the user's local time. When the user names a clock time \
+        ("until 10", "by 10:15"), do NOT convert it to minutes yourself — pass it \
+        straight to the tool's `until` parameter and the app computes the exact \
+        duration from the current time.
+        """)
+
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - System prompt
 
-    func buildSystemPrompt(alarm: Alarm, event: AlarmEvent?, snoozeButtonMinutes: Int) -> String {
+    func buildSystemPrompt(
+        alarm: Alarm,
+        event: AlarmEvent?,
+        snoozeButtonMinutes: Int,
+        now: Date = Date()
+    ) -> String {
         var parts: [String] = []
 
         parts.append("""
@@ -126,6 +211,10 @@ final class ConversationEngine {
 
         parts.append("Alarm label: \(alarm.label.isEmpty ? "Alarm" : alarm.label)")
         parts.append("Alarm time: \(alarm.timeString)")
+
+        // Everything time-bearing the app knows, stamped. Rebuilt on every
+        // assistant turn (runAssistantTurn), so "now" stays current for free.
+        parts.append(buildTimeContext(alarm: alarm, event: event, now: now))
 
         // Five-box commitment fields. Each box is passed with its question
         // title so the LLM understands the framing. Empty boxes are skipped.
@@ -233,10 +322,22 @@ final class ConversationEngine {
           the user physically TAPS it; your authorization alone doesn't end anything.
           Use only when the user has given you a CONCRETE commitment (specific action,
           not just "yeah"). Tell them to hit DOING IT — the tap is their confirmation.
-        • set_snooze_duration — change how many minutes the Snooze button uses (currently
-          \(snoozeButtonMinutes)). Only raise if user gives a concrete reason.
+        • set_snooze_duration — change how long the Snooze button uses (currently
+          \(snoozeButtonMinutes) min). Only raise if user gives a concrete reason.
         • snooze_alarm — immediately snooze without waiting for the user to tap the button.
           Use when YOU decide a snooze is warranted (e.g. "I'll give you 5 minutes" mid-convo).
+
+        CLOCK TIMES — both snooze tools take EITHER `minutes` (from now) OR `until`
+        (a "HH:mm" clock time). Never both, never neither.
+        When the user names a time — "until 10", "by 10:15", "give me till quarter
+        past" — pass `until` and let the app do the arithmetic. Do NOT subtract clock
+        times yourself: you have been wrong about this in a way neither side noticed,
+        granting 30 minutes for a request that was worth 18. The tool result tells you
+        the exact duration AND the absolute return time — use those numbers when you
+        tell the user when you'll be back, never your own.
+        If a request exceeds the \(Constants.maxSnoozeMinutes) min cap it is clamped, and
+        the tool result will say so. When that happens you MUST tell the user the real
+        return time rather than the one they asked for.
         • mark_overridden — YOU judge the user has a legitimate reason to skip (emergency,
           sick, etc.). Alarm stops, streak resets. Use sparingly.
 
