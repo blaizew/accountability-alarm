@@ -98,7 +98,7 @@ private enum IntentSwiftData {
             event = AlarmEvent(alarm: alarm)
             context.insert(event)
         }
-        event.snoozeCount += 1
+        event.recordSnooze(minutes: minutes, source: .snoozeButton)
 
         try? context.save()
     }

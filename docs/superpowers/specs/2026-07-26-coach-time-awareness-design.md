@@ -635,9 +635,10 @@ Violating any of these fails the whole run regardless of other criteria.
 - **AC-1.4 (regression guard)** No direct mutation of `snoozeCount` survives
   outside `recordSnooze`:
   ```sh
-  grep -rn "snoozeCount *+= *1\|snoozeCount *= *snoozeCount" "$SRC" | grep -v "func recordSnooze" | wc -l
+  grep -rn "snoozeCount *+=" "$SRC" | grep -v "Models/AlarmEvent.swift" | wc -l
   ```
-  prints `0`. The three former sites — `Intents/SnoozeStopIntent.swift`,
+  prints `0`, and the unfiltered count prints `1` — the single increment
+  inside `recordSnooze`. The three former sites — `Intents/SnoozeStopIntent.swift`,
   `ViewModels/ConversationViewModel.swift` (`resolveSnooze`, `snooze_alarm`
   dispatch) — must all route through `recordSnooze`.
 - **AC-1.5** Compile-only build succeeds:

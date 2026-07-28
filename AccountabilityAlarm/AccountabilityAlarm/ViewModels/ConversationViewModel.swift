@@ -75,6 +75,13 @@ final class ConversationViewModel {
         // across re-rings — the LLM's skepticism ladder keys off it.
         if let existing = AlarmEvent.openChain(for: alarm) {
             self.event = existing
+            // The safety net is the one snooze scheduled without being
+            // recorded — it's armed on every conversation open, so recording
+            // it then would count a snooze that may never happen. It only
+            // becomes real if it actually fires and drags us back here, which
+            // is exactly this branch. Attribute it when no recorded snooze
+            // accounts for the elapsed pending snooze.
+            Self.recordElapsedSafetyNet(alarm: alarm, event: existing)
             // Restore the chain's earlier conversation(s) so this session is
             // a continuation, not a restart: the user sees the prior
             // back-and-forth, saveConversation appends instead of clobbering
@@ -122,6 +129,33 @@ final class ConversationViewModel {
             // the user's recorded reason, framed as a concrete question.
             await runAssistantTurn(context: context)
         }
+    }
+
+    /// Attribute an elapsed safety-net snooze that nothing else accounts for.
+    ///
+    /// Coach and button snoozes are recorded when *granted*. The safety net
+    /// isn't — it's armed silently at every conversation open, and only counts
+    /// if it fires. So when a chain re-opens and the alarm's pending snooze has
+    /// already elapsed, we check whether any recorded snooze ends at that time.
+    /// If none does, the safety net is what brought the user back.
+    private static func recordElapsedSafetyNet(alarm: Alarm, event: AlarmEvent) {
+        guard let until = alarm.snoozedUntil, until <= Date() else { return }
+
+        // Tolerance covers scheduling jitter between our Date() math and when
+        // AlarmKit actually fires.
+        let accountedFor = event.snoozeLog.contains { record in
+            let end = record.at.addingTimeInterval(TimeInterval(record.minutes * 60))
+            return abs(end.timeIntervalSince(until)) < 90
+        }
+        guard !accountedFor else { return }
+
+        let minutes = Constants.conversationSafetyNetMinutes
+        event.recordSnooze(
+            minutes: minutes,
+            source: .safetyNet,
+            at: until.addingTimeInterval(-TimeInterval(minutes * 60)),
+            isApproximate: true
+        )
     }
 
     /// Trigger message for a re-ring within an open chain. Carries the
@@ -193,7 +227,7 @@ final class ConversationViewModel {
         Task { @MainActor in
             await rescheduleSnooze(context: context, minutes: n)
         }
-        event?.snoozeCount += 1
+        event?.recordSnooze(minutes: n, source: .snoozeButton)
         alarm.snoozedUntil = Date().addingTimeInterval(TimeInterval(n * 60))
         alarmSoundState = .stopped
         messages.append(.init(role: .assistant, content: "Okay — \(n) more minutes. I'll be back."))
@@ -382,7 +416,7 @@ final class ConversationViewModel {
             let minutes = tool.input["minutes"]?.int ?? snoozeButtonMinutes
             await LogService.shared.log(.conversation, "snooze_alarm: \(minutes) min", alarmId: alarm?.id.uuidString)
             await rescheduleSnooze(context: context, minutes: minutes)
-            event?.snoozeCount += 1
+            event?.recordSnooze(minutes: minutes, source: .coach)
             alarmSoundState = .stopped
             queueToolResult(id: tool.id, content: "Snoozed for \(minutes) minutes.")
             autoDismissOnCompletion = true
