@@ -719,21 +719,26 @@ xcrun devicectl device install app --device "$UDID" \
   `[max(scheduledRingTime, observation − 300s), observation]`, and the §2
   timeline renders it prefixed `~`.
 
-- **AC-3.3 — Test C, no false "ignored" past 30 minutes. [HUMAN]**
+- **AC-3.3 — Test C, no false "ignored", and counts accumulate. [HUMAN]**
   Script: set an alarm ~2 min out; background the app; let it ring; tap
-  "Snooze 5 min" **seven times** across the re-rings, so more than 30 minutes
-  elapse from the original due time; do **not** open the app until after the
-  seventh; then open it. `pull-store`, and:
+  "Snooze 5 min" **three times** across the re-rings; then open the app.
+  `pull-store`, and:
   ```sh
   sqlite3 -separator '  ' "$STORE/default.store" \
     "SELECT datetime(ZFIREDAT+978307200,'unixepoch','localtime'), ZOUTCOME, ZSNOOZECOUNT
      FROM ZALARMEVENT WHERE ZFIREDAT > strftime('%s','now','-3 hours') - 978307200;"
   ```
-  **Pass:** exactly **one** row. `ZOUTCOME='pending'`. `ZSNOOZECOUNT` equals
-  the number of taps. **No row with `ZOUTCOME='ignored'`.**
-  This is the criterion that catches the AC-2.5 ordering hazard; a wrong
-  ordering yields two rows, one `ignored`, while the app's own UI still looks
-  correct.
+  **Pass:** exactly **one** row, `ZOUTCOME='pending'`, `ZSNOOZECOUNT=3`, and
+  **no row with `ZOUTCOME='ignored'`**.
+
+  *Revised 2026-07-28.* This originally demanded seven taps across more than
+  30 minutes, to cross the old `missedGraceMinutes` boundary. That threshold
+  no longer exists — `recordMissedFirings` is ungated, so a wrong ordering
+  produces the false `ignored` on the **first** snooze, and AC-3.1 already
+  exercises the hazard. What remains for this criterion is that repeated
+  snoozes accumulate on one event instead of fragmenting into several, which
+  three taps demonstrates as well as seven. Keeping the 35-minute version
+  would have cost half an hour to test a boundary the implementation deleted.
 
 - **AC-3.4 — ignored is revisable. [HUMAN]**
   Script: set an alarm ~2 min out; let it ring and touch nothing for ~16 min
