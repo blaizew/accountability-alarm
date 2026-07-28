@@ -67,8 +67,61 @@ final class AlarmKitService {
             for await alarms in AlarmManager.shared.alarmUpdates {
                 let ids = Set(alarms.map { $0.id })
                 await self.observed.update(ids)
+
+                // TEMPORARY INSTRUMENTATION (spec §3.4). Logs every update
+                // with each alarm's state so we can establish whether this
+                // observer fires while the app is suspended — i.e. whether
+                // an .alerting → .countdown transition (the user tapping
+                // "Snooze 5 min" from the lock screen) is observable at the
+                // moment it happens, or only on resume. Remove once answered.
+                let desc = alarms
+                    .map { "\($0.id.uuidString.prefix(8))=\(Self.stateName($0.state))" }
+                    .sorted()
+                    .joined(separator: " ")
+                await LogService.shared.log(
+                    .alarmkit,
+                    "PROBE observer: \(alarms.count) alarm(s) [\(desc.isEmpty ? "none" : desc)]"
+                )
             }
         }
+    }
+
+    /// TEMPORARY INSTRUMENTATION (spec §3.4). `Alarm.State` is Codable but has
+    /// no display form; this keeps the probe readable in the log.
+    nonisolated private static func stateName(_ state: AKAlarm.State) -> String {
+        switch state {
+        case .scheduled: return "scheduled"
+        case .countdown: return "countdown"
+        case .paused:    return "paused"
+        case .alerting:  return "alerting"
+        @unknown default: return "unknown"
+        }
+    }
+
+    /// TEMPORARY INSTRUMENTATION (spec §3.4). Synchronous read of
+    /// `AlarmManager.alarms` — the fallback path, which does not depend on the
+    /// observer having run. Called at app open to confirm a countdown snooze
+    /// taken while the app was suspended is still visible after the fact.
+    func probeCurrentAlarmStates(tag: String) async {
+        let current: [AKAlarm]
+        do {
+            current = try manager.alarms
+        } catch {
+            await LogService.shared.log(
+                .alarmkit,
+                "PROBE syncPoll[\(tag)]: threw \(error.localizedDescription)",
+                isError: true
+            )
+            return
+        }
+        let desc = current
+            .map { "\($0.id.uuidString.prefix(8))=\(Self.stateName($0.state))" }
+            .sorted()
+            .joined(separator: " ")
+        await LogService.shared.log(
+            .alarmkit,
+            "PROBE syncPoll[\(tag)]: \(current.count) alarm(s) [\(desc.isEmpty ? "none" : desc)]"
+        )
     }
 
     // MARK: - Authorization
@@ -257,6 +310,8 @@ final class AlarmKitService {
         defer { isReconciling = false }
 
         await LogService.shared.log(.app, "reconcileOnAppOpen: \(alarms.count) alarms")
+        // TEMPORARY INSTRUMENTATION (spec §3.4). Remove once answered.
+        await probeCurrentAlarmStates(tag: "reconcileOnAppOpen")
 
         var trackedIds: Set<UUID> = []
         for alarm in alarms {
