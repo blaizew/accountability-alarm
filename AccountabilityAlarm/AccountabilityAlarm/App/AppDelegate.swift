@@ -18,8 +18,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // a detached background task so the launch path doesn't block.
         AlarmKitService.shared.startObserving()
         Task { await LogService.shared.log(.app, "app didFinishLaunching") }
-        // TEMPORARY INSTRUMENTATION (spec AC-5.1). Removed in Phase 7.
+        // TEMPORARY INSTRUMENTATION (spec AC-5.1, AC-4.2). Removed in Phase 7.
         Task { await SnoozeResolverSelfCheck.run() }
+        Task { await TimeContextSelfCheck.run() }
         return true
     }
 
