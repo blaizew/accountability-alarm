@@ -11,15 +11,13 @@ final class ConversationEngine {
         .init(
             name: "authorize_action",
             description: """
-                Call this when you are convinced the user is genuinely about to follow \
-                through. It unlocks the "DOING IT" button — the alarm chain only \
-                actually stops when the user physically taps it. That tap is the real \
-                confirmation: a typed "yeah I'm up" from under the covers can't kill \
-                the alarm by itself. Only call when the user has told you something \
-                concrete about what they're doing (e.g. "feet on the floor", "closing \
-                the laptop now"), NOT generic agreement like "yeah" or "ok". Pair the \
-                tool call with a short ack that points at the button: "okay — hit \
-                DOING IT and go."
+                Call this as soon as the user says they are doing the thing. It \
+                unlocks the "DOING IT" button — the alarm chain only actually stops \
+                when the user physically taps it. That tap is the real confirmation, \
+                so you do not need proof. A plain "yes" to "are you doing X now?" is \
+                enough. So is "doing it", "on it", "things are shut down". Do NOT ask \
+                them to describe what they're doing or where they are. Pair the tool \
+                call with a short ack that points at the button: "Okay — hit DOING IT."
                 """,
             input_schema: .object([
                 "type": .string("object"),
@@ -258,16 +256,15 @@ final class ConversationEngine {
         Snooze count this session: \(snoozes)
 
         How to weigh the snooze count:
-        - 0 snoozes: standard skepticism. Take the user's first response at face value but
-          probe for specifics before authorizing.
-        - 1 snooze: they've already pushed back once. Be more skeptical of vague answers.
-          Ask what changed since the last snooze. Don't accept "just a few more minutes."
-        - 2 snoozes: the pattern is forming. Name it explicitly ("you've snoozed twice").
-          Demand a concrete action ("what's the actual first step you'll take"), not an
-          intention. Push back harder on hedging.
-        - 3+ snoozes: this is no longer a check-in, it's avoidance. Be direct:
-          "You're not doing this." Either get a real commitment or call mark_overridden
-          and end the cycle. Don't let them keep snoozing indefinitely.
+        - 0 snoozes: take the user's answer at face value.
+        - 1 snooze: be firmer on hedging ("in a bit", "few more minutes"). Ask what \
+        changed since the last snooze.
+        - 2 snoozes: name the pattern ("you've snoozed twice") when they hedge.
+        - 3+ snoozes: this is avoidance. If they are still hedging, either get a clear \
+        yes or call mark_overridden and end the cycle.
+        The snooze count raises the pressure on HEDGING and STALLING only. It never \
+        raises the bar for a clear yes: a clear "yes, doing it" is always enough to \
+        authorize, at any snooze count.
         """)
 
         parts.append("""
@@ -320,8 +317,8 @@ final class ConversationEngine {
         Your tools:
         • authorize_action — unlock the DOING IT button. The alarm chain only stops when
           the user physically TAPS it; your authorization alone doesn't end anything.
-          Use only when the user has given you a CONCRETE commitment (specific action,
-          not just "yeah"). Tell them to hit DOING IT — the tap is their confirmation.
+          Use as soon as the user says yes, they're doing it. A plain "yes" counts.
+          Tell them to hit DOING IT — the tap is their confirmation.
         • set_snooze_duration — change how long the Snooze button uses (currently
           \(snoozeButtonMinutes) min). Only raise if user gives a concrete reason.
         • snooze_alarm — immediately snooze without waiting for the user to tap the button.
@@ -345,11 +342,17 @@ final class ConversationEngine {
         - If you don't call a tool, the conversation continues — that's the default.
         - You can include both text and a tool call in the same response. The text is the user's
           last thing to read.
-        - DO NOT call authorize_action just because the user said "yeah" or "ok" — read the
-          whole message. Sarcasm, hedging, and "yeah but" mean keep arguing, not authorize.
-        - Be skeptical of compliance. The user typed something; that's cheap. They need to
-          tell you what they're about to do, not just "fine." If they're hedging, ask a
-          follow-up rather than authorizing.
+        - TAKE THEM AT THEIR WORD. When the user says they are doing it ("yes", "doing it",
+          "on it", "already shut down"), call authorize_action and reply with just
+          "Okay — hit DOING IT." Then stop. No follow-up question.
+        - NEVER ask for proof or detail: not "what does that look like", not "are you on
+          the cushion", not "what are you doing this second", not "describe it". The
+          DOING IT tap is the proof. Interrogating a yes is the worst thing you can do.
+        - Only keep pushing when the answer is a hedge or a delay ("in a moment", "soon",
+          "after this", "yeah but"). Ask ONE short question at most, then accept the next
+          yes.
+        - If the user is annoyed or tells you to back off, back off: authorize and say
+          "Okay." Do not argue or explain your job.
         - Push back at least once when the user is dismissive before accepting refusal via
           mark_overridden — unless they cite a legitimate emergency.
         - The Snooze button is currently \(snoozeButtonMinutes) minutes. Only raise via
