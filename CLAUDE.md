@@ -76,6 +76,7 @@ via `devicectl device copy from` and query `ZALARMLOGENTRY` with sqlite3.
 
 ## Repo
 - Git identity: `blaizew` / `blaizew@users.noreply.github.com`.
-- Remote `origin` (github.com/blaizew/accountability-alarm) is behind local — most
-  commits have never been pushed. Push only when Blaize asks.
+- Remote `origin` (github.com/blaizew/accountability-alarm) was fully in sync with
+  local `main` as of 2026-09-28. Push only when Blaize asks — check
+  `git rev-list --left-right --count origin/main...main` for the current gap.
 - Bundle id: `com.blaizew.AccountabilityAlarm`.
