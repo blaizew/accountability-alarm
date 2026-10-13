@@ -44,6 +44,12 @@ Notes:
 - `devicectl device process launch` can auto-launch, but **fails if the phone is
   locked** — install still succeeds, so installing then letting Blaize open it
   is fine.
+- Signing uses a free personal-team profile that **expires 7 days after the
+  build** — then the app stops launching and needs a rebuild + reinstall. After
+  a reinstall, launch can fail with "profile has not been explicitly trusted by
+  the user" (FBSOpenApplicationErrorDomain error 3). Fix: Blaize goes to
+  Settings → General → VPN & Device Management → Apple Development entry →
+  Trust. Only he can do this on the phone. (Seen 2026-10-12.)
 - Replacing the app in place preserves its SwiftData store (his real alarms +
   history). Don't uninstall/reinstall — that wipes his data.
 
