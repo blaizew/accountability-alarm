@@ -248,6 +248,22 @@ final class ConversationEngine {
             """)
         }
 
+        let exceptions = alarm.exceptionCases.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !exceptions.isEmpty {
+            parts.append("""
+            EXCEPTION CASES — reasons the user pre-approved for skipping this alarm \
+            (their own words when they set it):
+            "\(exceptions)"
+
+            If the user's reason for not doing it clearly matches one of these \
+            exceptions, accept it without pushback: call mark_overridden with \
+            ai_accepts true and a reason that names the matching exception. Do not \
+            ask for proof. If the reason does not clearly match, these exceptions do \
+            not apply — follow the normal rules below. Never suggest an exception to \
+            the user or invite them to claim one.
+            """)
+        }
+
         // Always pass the snooze count, even at 0. The LLM uses this to
         // calibrate how skeptical to be — every additional snooze in this
         // session is evidence the user is dodging.
@@ -354,7 +370,7 @@ final class ConversationEngine {
         - If the user is annoyed or tells you to back off, back off: authorize and say
           "Okay." Do not argue or explain your job.
         - Push back at least once when the user is dismissive before accepting refusal via
-          mark_overridden — unless they cite a legitimate emergency.
+          mark_overridden — unless they cite a legitimate emergency or one of their listed exception cases.
         - The Snooze button is currently \(snoozeButtonMinutes) minutes. Only raise via
           set_snooze_duration if the user gives a concrete reason.
         """)

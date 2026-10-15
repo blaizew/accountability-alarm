@@ -21,6 +21,11 @@ final class Alarm {
     var positiveOutcome: String = ""
     var negativeOutcome: String = ""
     var longTermImpact: String = ""
+    /// Acceptable reasons to skip this alarm, written by the user when they
+    /// set it. The Coach accepts a skip that matches one of these without
+    /// pushback. Not one of the five commitment boxes — it is the user's
+    /// pre-approved list of legitimate exceptions.
+    var exceptionCases: String = ""
     var targetSleepHours: Double?
     var nextMorningEvent: String?
     var nextMorningEventHour: Int?

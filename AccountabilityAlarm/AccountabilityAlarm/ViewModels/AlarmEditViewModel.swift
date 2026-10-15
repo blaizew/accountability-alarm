@@ -17,6 +17,7 @@ final class AlarmEditViewModel {
     var positiveOutcome = ""
     var negativeOutcome = ""
     var longTermImpact = ""
+    var exceptionCases = ""
 
     var targetSleepHours: Double? = nil
     var nextMorningEvent = ""
@@ -73,6 +74,7 @@ final class AlarmEditViewModel {
         positiveOutcome = alarm.positiveOutcome
         negativeOutcome = alarm.negativeOutcome
         longTermImpact = alarm.longTermImpact
+        exceptionCases = alarm.exceptionCases
 
         // Legacy alarms only have reasonText. On first edit, surface it in
         // the "Desired behavior" box so the user can split it across the
@@ -114,6 +116,7 @@ final class AlarmEditViewModel {
         alarm.positiveOutcome = positiveOutcome
         alarm.negativeOutcome = negativeOutcome
         alarm.longTermImpact = longTermImpact
+        alarm.exceptionCases = exceptionCases
         alarm.targetSleepHours = targetSleepHours
         alarm.nextMorningEvent = nextMorningEvent.isEmpty ? nil : nextMorningEvent
         alarm.nextMorningEventHour = nextMorningEventHour

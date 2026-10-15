@@ -59,6 +59,12 @@ struct AlarmEditView: View {
                         placeholder: "e.g. years of sleep debt, no writing portfolio, drift from the life I want",
                         text: $vm.longTermImpact
                     )
+                    LCommitmentField(
+                        sectionNumber: "10",
+                        title: "Exception cases",
+                        placeholder: "e.g. I'm sick, a family emergency, a work incident I'm on call for, a flight before 7am",
+                        text: $vm.exceptionCases
+                    )
 
                     if !isNew { deleteSection }
                     Color.clear.frame(height: 40)
