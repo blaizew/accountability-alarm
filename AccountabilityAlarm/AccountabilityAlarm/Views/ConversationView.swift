@@ -19,6 +19,14 @@ struct ConversationView: View {
     @State private var mode: Mode = .voice
     @State private var elapsedSeconds: Int = 0
 
+    @State private var bumpChoice: BumpChoice?
+    @AppStorage(Constants.bumpHapticKey) private var hapticRaw = BumpHaptic.defaultValue.rawValue
+    @AppStorage(Constants.bumpRemovalKey) private var bumpRemoval = "random"
+    @AppStorage(Constants.bumpConfettiPatternKey) private var bumpPattern = "random"
+    @AppStorage(Constants.bumpConfettiShapesKey) private var bumpShapes = "random"
+    @AppStorage(Constants.bumpFistWidthKey) private var fistWidth = 0.65
+    @AppStorage(Constants.bumpLastRemovalKey) private var lastRemovalRaw = ""
+
     @FocusState private var textInputFocused: Bool
 
     enum Mode { case voice, text }
@@ -45,9 +53,17 @@ struct ConversationView: View {
                 topBar
                 if let alarm { alarmHeader(alarm) }
 
-                messagesScroll
-                bottomPanel
+                if vm.actionAuthorized, let choice = bumpChoice {
+                    bumpStage(choice)
+                        .transition(.opacity)
+                } else {
+                    messagesScroll
+                        .transition(.opacity)
+                    bottomPanel
+                        .transition(.opacity)
+                }
             }
+            .animation(.easeInOut(duration: 0.3), value: vm.actionAuthorized)
         }
         .foregroundStyle(L.Palette.fg)
         .preferredColorScheme(.dark)
@@ -69,6 +85,16 @@ struct ConversationView: View {
             // stop is finalizing, which left the record audio session live
             // after the view was gone.
             speech.cancelListening()
+        }
+        .onChange(of: vm.actionAuthorized) { _, authorized in
+            // Pick the bump's look once per authorization, so the stage
+            // never re-rolls on a redraw.
+            guard authorized, bumpChoice == nil else { return }
+            var r = BumpRandomizer()
+            bumpChoice = r.choose(removalOverride: FistRemoval(rawValue: bumpRemoval),
+                                  patternOverride: ConfettiPattern(rawValue: bumpPattern),
+                                  shapesOverride: ConfettiShapes(rawValue: bumpShapes),
+                                  lastRemoval: FistRemoval(rawValue: lastRemovalRaw))
         }
         .onChange(of: vm.messages.count) { _, count in
             // count > seededMessageCount: never re-speak a message restored
@@ -193,6 +219,30 @@ struct ConversationView: View {
         .overlay(alignment: .top) { L.Palette.hair2.frame(height: 1) }
     }
 
+    private func bumpStage(_ choice: BumpChoice) -> some View {
+        BumpStageView(
+            sendOff: vm.sendOff,
+            fistWidthFraction: fistWidth,
+            haptic: BumpHaptic(rawValue: hapticRaw) ?? .defaultValue,
+            choice: choice,
+            snoozeLabel: "Snooze \(vm.snoozeButtonMinutes)m",
+            isDemo: false,
+            onBump: {
+                vm.resolveAction(context: modelContext)
+                lastRemovalRaw = choice.removal.rawValue
+            },
+            onFinished: {
+                appState.dismissAlarm()
+                dismiss()
+            },
+            onSnooze: {
+                vm.resolveSnooze(context: modelContext)
+                appState.dismissAlarm()
+                dismiss()
+            }
+        )
+    }
+
     private var outcomeButtons: some View {
         HStack(spacing: 6) {
             Button {
@@ -212,30 +262,6 @@ struct ConversationView: View {
             .buttonStyle(.plain)
             // A resolved chain must not be re-armed from the still-open view.
             .disabled(vm.isCompleted)
-
-            Button {
-                vm.resolveAction(context: modelContext)
-                appState.dismissAlarm()
-                dismiss()
-            } label: {
-                Text("Doing It ↑")
-                    .font(L.Mono.font(10.5, weight: .semibold))
-                    .tracking(0.6)
-                    .textCase(.uppercase)
-                    .foregroundStyle(vm.actionAuthorized ? L.Palette.bg : L.Palette.dim)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(vm.actionAuthorized ? L.Palette.fg : L.Palette.bg3)
-                    .overlay(
-                        Rectangle().stroke(
-                            vm.actionAuthorized ? Color.clear : L.Palette.hair2,
-                            lineWidth: 1
-                        )
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(!vm.actionAuthorized)
-            .animation(.easeInOut(duration: 0.15), value: vm.actionAuthorized)
         }
         .padding(.horizontal, L.Space.pageH)
         .padding(.bottom, 26)

@@ -16,11 +16,15 @@ final class ConversationViewModel {
     var isCompleted = false
     var alarmSoundState: AlarmSoundState = .paused
 
-    /// "DOING IT" button is greyed out until the LLM calls `authorize_action`.
+    /// The fist bump stage is hidden until the LLM calls `authorize_action`.
     /// The LLM only authorizes once the user has given a concrete commitment
     /// that they're about to perform the action the alarm was set for.
-    /// Authorization only unlocks the button — the chain dies on the tap.
+    /// Authorization only shows the stage — the chain dies on the bump.
     var actionAuthorized = false
+
+    /// The Coach's send-off, taken from its reply in the same response as
+    /// `authorize_action`. Set before `actionAuthorized` flips to true.
+    private(set) var sendOff: String?
 
     /// How many minutes the Snooze button will snooze for. Seeded from the
     /// alarm's configured `snoozeMinutes` in setup(); LLM adjusts via
@@ -223,7 +227,7 @@ final class ConversationViewModel {
         // transcript behind it override itself on the first reply — logging
         // "overridden" and resetting the streak while the user was complying.
         let turnsThisSession = messages.count - seededMessageCount
-        if !isCompleted, turnsThisSession >= Constants.maxConversationTurns * 2 {
+        if BumpRules.shouldOverrideForTurnLimit(isCompleted: isCompleted, actionAuthorized: actionAuthorized, turnsThisSession: turnsThisSession, maxTurns: Constants.maxConversationTurns) {
             handleOverride(reason: "Max conversation turns reached", context: context)
         }
     }
@@ -393,16 +397,17 @@ final class ConversationViewModel {
         switch tool.name {
 
         case "authorize_action":
+            sendOff = BumpSendOff.pick(messages)
             actionAuthorized = true
-            await LogService.shared.log(.conversation, "authorize_action: DOING IT unlocked", alarmId: alarm?.id.uuidString)
-            // Two-step compliance: authorization only unlocks the DOING IT
-            // button. The chain dies when the user physically taps it
+            await LogService.shared.log(.conversation, "authorize_action: bump stage unlocked", alarmId: alarm?.id.uuidString)
+            // Two-step compliance: authorization only shows the fist bump
+            // stage. The chain dies when the user physically taps the fist
             // (resolveAction → handleCompliance). A half-asleep "feet on
             // the floor" typed from bed can't kill the alarm on its own —
             // the tap is the cheap-but-real physical confirmation. If the
-            // user keeps snoozing instead of tapping, the safety-net snooze
+            // user keeps snoozing instead of bumping, the safety-net snooze
             // keeps the chain alive.
-            queueToolResult(id: tool.id, content: "DOING IT button unlocked. The alarm chain stops only when the user taps it — if they keep talking instead of tapping, they haven't followed through yet.")
+            queueToolResult(id: tool.id, content: "Authorized. The conversation has ended. Do not reply.")
 
         case "set_snooze_duration":
             let before = snoozeButtonMinutes

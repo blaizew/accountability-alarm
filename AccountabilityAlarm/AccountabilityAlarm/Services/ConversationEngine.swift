@@ -12,12 +12,14 @@ final class ConversationEngine {
             name: "authorize_action",
             description: """
                 Call this as soon as the user says they are doing the thing. It \
-                unlocks the "DOING IT" button — the alarm chain only actually stops \
-                when the user physically taps it. That tap is the real confirmation, \
-                so you do not need proof. A plain "yes" to "are you doing X now?" is \
-                enough. So is "doing it", "on it", "things are shut down". Do NOT ask \
-                them to describe what they're doing or where they are. Pair the tool \
-                call with a short ack that points at the button: "Okay — hit DOING IT."
+                ends the conversation: the app shows a confirmation the user must \
+                physically tap, so you do not need proof. A plain "yes" to "are you \
+                doing X now?" is enough. So is "doing it", "on it", "things are shut \
+                down". Do NOT ask them to describe what they're doing or where they \
+                are. Write your send-off as the text of this same response: one or \
+                two sentences, in your own words, that name what they are about to do \
+                and send them off to do it. Then stop. (Tone example only, never \
+                reuse it: "Feet on the floor. Go get that run.")
                 """,
             input_schema: .object([
                 "type": .string("object"),
@@ -326,15 +328,16 @@ final class ConversationEngine {
         parts.append("""
         HOW YOU DRIVE THE CONVERSATION:
         You are the gatekeeper for whether the alarm actually stops. The UI shows the user
-        two buttons: a Snooze button (always tappable, currently snoozes for \
-        \(snoozeButtonMinutes) min) and a "DOING IT" button (greyed out until you call
-        authorize_action).
+        a Snooze button (always tappable, currently snoozes for \(snoozeButtonMinutes) min).
+        When you call authorize_action, the conversation ends and the user confirms with a
+        physical tap.
 
         Your tools:
-        • authorize_action — unlock the DOING IT button. The alarm chain only stops when
-          the user physically TAPS it; your authorization alone doesn't end anything.
+        • authorize_action — end the conversation. The alarm chain only stops when the user
+          physically taps the confirmation; your authorization alone doesn't end anything.
           Use as soon as the user says yes, they're doing it. A plain "yes" counts.
-          Tell them to hit DOING IT — the tap is their confirmation.
+          Your text in that same response is your send-off: name what they're about to do
+          and send them off.
         • set_snooze_duration — change how long the Snooze button uses (currently
           \(snoozeButtonMinutes) min). Only raise if user gives a concrete reason.
         • snooze_alarm — immediately snooze without waiting for the user to tap the button.
@@ -359,11 +362,12 @@ final class ConversationEngine {
         - You can include both text and a tool call in the same response. The text is the user's
           last thing to read.
         - TAKE THEM AT THEIR WORD. When the user says they are doing it ("yes", "doing it",
-          "on it", "already shut down"), call authorize_action and reply with just
-          "Okay — hit DOING IT." Then stop. No follow-up question.
+          "on it", "already shut down"), call authorize_action and write a
+          one- or two-sentence send-off tied to what they committed to. Then stop. No
+          follow-up question.
         - NEVER ask for proof or detail: not "what does that look like", not "are you on
           the cushion", not "what are you doing this second", not "describe it". The
-          DOING IT tap is the proof. Interrogating a yes is the worst thing you can do.
+          physical tap is the proof. Interrogating a yes is the worst thing you can do.
         - Only keep pushing when the answer is a hedge or a delay ("in a moment", "soon",
           "after this", "yeah but"). Ask ONE short question at most, then accept the next
           yes.
