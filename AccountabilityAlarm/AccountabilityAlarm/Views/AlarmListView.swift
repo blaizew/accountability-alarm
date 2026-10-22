@@ -11,6 +11,7 @@ struct AlarmListView: View {
     @State private var viewModel = AlarmListViewModel()
     @State private var alarmToEdit: Alarm?
     @State private var showNew = false
+    @State private var showSettings = false
     @State private var now: String = AlarmListView.currentClock()
     @State private var showDowntimeNotice = false
     @AppStorage(Constants.downtimeNoticeAcknowledgedKey) private var downtimeAcknowledged = false
@@ -22,7 +23,18 @@ struct AlarmListView: View {
             LTopBar(
                 left: "ALARMS · \(alarms.filter(\.enabled).count)/\(alarms.count) ON",
                 right: now,
-                rightColor: L.Palette.muted
+                rightColor: L.Palette.muted,
+                trailing: AnyView(
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 13))
+                            .foregroundStyle(L.Palette.muted)
+                            .padding(.leading, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                )
             )
 
             if !downtimeAcknowledged {
@@ -79,6 +91,13 @@ struct AlarmListView: View {
         .sheet(isPresented: $showNew) {
             AlarmEditView()
                 .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .preferredColorScheme(.dark)
+        }
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("--open-settings") { showSettings = true }
         }
         .sheet(item: $alarmToEdit) { alarm in
             AlarmEditView(alarm: alarm)

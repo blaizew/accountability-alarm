@@ -8,6 +8,7 @@ struct LTopBar: View {
     var leftColor: Color = L.Palette.muted
     var rightColor: Color = L.Palette.dim
     var onRight: (() -> Void)? = nil
+    var trailing: AnyView? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -26,6 +27,8 @@ struct LTopBar: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            if let trailing { trailing }
         }
         .padding(.horizontal, L.Space.pageH)
         .padding(.vertical, 8)
