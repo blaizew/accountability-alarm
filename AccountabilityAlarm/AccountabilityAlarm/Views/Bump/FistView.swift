@@ -2,6 +2,11 @@ import SwiftUI
 
 /// The fist emoji. Grows in on appear, then breathes while the phase is `.ready`.
 struct FistView: View {
+    /// Emoji font size as a multiple of the frame width. Chosen so the visible ink is about the frame width.
+    static let fontFactor: CGFloat = 1.1
+    /// Visible ink height of the glyph as a multiple of the frame width (measured). The hint anchors to it.
+    static let inkHeightFactor: CGFloat = 0.875
+
     let emoji: String
     let width: CGFloat
     let phase: BumpPhase
@@ -20,7 +25,8 @@ struct FistView: View {
 
     var body: some View {
         Text(emoji)
-            .font(.system(size: width * 0.82))
+            .font(.system(size: width * FistView.fontFactor))
+            .fixedSize()
             .frame(width: width, height: width)
             .scaleEffect(reduceMotion ? 1 : (entered ? 1 : 0.05))
             .scaleEffect(breathing ? 1.03 : 1)

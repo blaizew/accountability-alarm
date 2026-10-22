@@ -36,6 +36,8 @@ struct BumpStageView: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var phase: BumpPhase = .entering
     @State private var hintVisible = false
+    /// Set by whichever of bump or Snooze happens first; the other then does nothing.
+    @State private var resolved = false
 
     private var reduceMotion: Bool { reduceMotionOverride ?? systemReduceMotion }
     private var bumped: Bool { phase == .bumped }
@@ -69,7 +71,7 @@ struct BumpStageView: View {
                         .animation(.easeOut(duration: 0.4), value: hintVisible)
                         .animation(.easeOut(duration: 0.4), value: bumped)
                         .position(x: geo.size.width / 2,
-                                  y: geo.size.height / 2 + width / 2 + 12 + 7)
+                                  y: geo.size.height / 2 + width * FistView.inkHeightFactor / 2 + 12 + 7)
                         .allowsHitTesting(false)
 
                     if bumped && !reduceMotion {
@@ -86,7 +88,7 @@ struct BumpStageView: View {
             }
 
             if !isDemo {
-                Button(action: onSnooze) {
+                Button(action: snooze) {
                     Text(snoozeLabel)
                         .font(L.Mono.font(10.5))
                         .tracking(0.6)
@@ -97,6 +99,7 @@ struct BumpStageView: View {
                         .overlay(Rectangle().stroke(L.Palette.hair2, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .disabled(resolved)
                 .padding(.horizontal, L.Space.pageH)
                 .padding(.bottom, 12)
                 .opacity(bumped ? 0 : 1)
@@ -122,10 +125,17 @@ struct BumpStageView: View {
         }
     }
 
+    private func snooze() {
+        guard !resolved else { return }
+        resolved = true
+        onSnooze()
+    }
+
     private func bump() {
-        guard phase.canBump else { return }
+        guard !resolved, phase.canBump else { return }
+        resolved = true
+        phase = .bumped
         onBump()
         HapticService.shared.play(haptic)
-        phase = .bumped
     }
 }

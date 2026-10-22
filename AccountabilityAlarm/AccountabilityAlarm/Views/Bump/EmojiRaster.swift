@@ -3,13 +3,14 @@ import UIKit
 
 /// Rasterizes an emoji to a bitmap so it can be sliced into pieces.
 enum EmojiRaster {
-    /// The glyph's visible width is about 82 percent of its point size's frame,
-    /// matching `FistView`. The image is a square of `pointSize / 0.82` points.
+    /// The glyph is sized at `FistView.fontFactor` times the frame width,
+    /// matching `FistView`. The image is a square of `pointSize / fontFactor` points.
     @MainActor
     static func image(_ emoji: String, pointSize: CGFloat) -> UIImage? {
-        let side = pointSize / 0.82
+        let side = pointSize / FistView.fontFactor
         let content = Text(emoji)
             .font(.system(size: pointSize))
+            .fixedSize()
             .frame(width: side, height: side)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2

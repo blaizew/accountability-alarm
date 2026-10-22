@@ -82,7 +82,8 @@ struct FistRemovalView: View {
 
     private var fist: some View {
         Text(emoji)
-            .font(.system(size: width * 0.82))
+            .font(.system(size: width * FistView.fontFactor))
+            .fixedSize()
             .frame(width: width, height: width)
     }
 
@@ -106,7 +107,7 @@ struct FistRemovalView: View {
                 withAnimation(.linear(duration: 0.1)) { opacity = 0 }
             }
         case .dissolve, .shatter:
-            raster = EmojiRaster.image(emoji, pointSize: width * 0.82)
+            raster = EmojiRaster.image(emoji, pointSize: width * FistView.fontFactor)
         case .recoil:
             withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) {
                 scale = 0.88
