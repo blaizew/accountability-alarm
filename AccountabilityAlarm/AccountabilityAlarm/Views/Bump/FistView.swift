@@ -15,31 +15,30 @@ struct FistView: View {
     }
 
     @State private var entered = false
+    @State private var entranceDone = false
     @State private var breathing = false
 
     var body: some View {
         Text(emoji)
             .font(.system(size: width * 0.82))
             .frame(width: width, height: width)
-            .scaleEffect(scale)
+            .scaleEffect(reduceMotion ? 1 : (entered ? 1 : 0.05))
+            .scaleEffect(breathing ? 1.03 : 1)
             .blur(radius: reduceMotion || entered ? 0 : 8)
             .opacity(reduceMotion && !entered ? 0 : 1)
             .onAppear {
                 withAnimation(reduceMotion ? .easeOut(duration: 0.3) : .easeOut(duration: 0.9)) {
                     entered = true
+                } completion: {
+                    entranceDone = true
+                    startBreathingIfReady()
                 }
-                startBreathingIfReady()
             }
             .onChange(of: phase) { _, _ in startBreathingIfReady() }
     }
 
-    private var scale: CGFloat {
-        if reduceMotion { return 1 }
-        return (entered ? 1 : 0.05) * (breathing ? 1.03 : 1.0)
-    }
-
     private func startBreathingIfReady() {
-        guard phase == .ready, !reduceMotion, !breathing else { return }
+        guard phase == .ready, entranceDone, !reduceMotion, !breathing else { return }
         withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
             breathing = true
         }

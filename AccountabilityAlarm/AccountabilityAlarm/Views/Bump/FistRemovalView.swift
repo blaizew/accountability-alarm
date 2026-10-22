@@ -16,6 +16,8 @@ struct FistRemovalView: View {
         self.width = width
         self.reduceMotion = reduceMotion
         self.onFinished = onFinished
+        // Ring starts at the fist's width, fully visible, on the first render.
+        _ringDiameter = State(initialValue: width)
     }
 
     // Transform-based styles
@@ -25,8 +27,8 @@ struct FistRemovalView: View {
     @State private var yOffset: CGFloat = 0
     // Shockwave
     @State private var flash: Double = 0
-    @State private var ringDiameter: CGFloat = 0
-    @State private var ringOpacity: Double = 0
+    @State private var ringDiameter: CGFloat
+    @State private var ringOpacity: Double = 1
     // Raster styles
     @State private var raster: UIImage?
     @State private var sim = PieceSimulation()
@@ -122,8 +124,6 @@ struct FistRemovalView: View {
                 opacity = 0
             }
         case .shockwave:
-            ringDiameter = width
-            ringOpacity = 1
             withAnimation(.linear(duration: 0.7)) {
                 ringDiameter = screenWidth * 1.6
                 ringOpacity = 0
