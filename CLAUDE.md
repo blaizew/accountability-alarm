@@ -63,6 +63,23 @@ Notes:
   input verb) — so first-run dialogs and tab switches can't be driven headlessly.
 - **Compile-only:** `-destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`.
 
+## Testing without a real alarm (added 2026-10-21)
+- **Rehearsal:** the play glyph on any alarm row, or the `SEE HOW IT WORKS` row at
+  the bottom of the Alarms list, opens the real Coach conversation (and the fist
+  bump) against an un-inserted copy of the alarm with its time set to now. It
+  writes nothing: no `AlarmEvent`, no `context.save()`, no AlarmKit. Top bar says
+  `REHEARSAL` with an `END` button. Logs are prefixed `rehearsal: `.
+- **Settings → TRY IT** (gear on the Alarms screen) plays only the bump: haptic,
+  confetti, removal. Haptic presets have PREVIEW buttons.
+- **Launch arguments** for headless simulator screenshots (no taps needed):
+  `--bump-demo` (the bump stage), `--open-settings`, `--rehearse-sample`.
+  `xcrun simctl launch <sim-udid> com.blaizew.AccountabilityAlarm --bump-demo`
+- **Logic tests:** `scripts/bump-tests/run.sh` compiles `Bump/Logic/*.swift` with
+  `swiftc` and prints `ALL PASSED`. Those files are Foundation-only on purpose;
+  the Xcode project has no test target.
+- Design docs: `docs/superpowers/specs/2026-10-21-fist-bump-design.md` and
+  `2026-10-21-rehearsal-design.md`.
+
 ## Debugging on-device
 Full procedure (pull the SwiftData store to read the app's own event log, os_log
 collection, crash/hang reports) lives in agent memory: `device-debugging.md` in
