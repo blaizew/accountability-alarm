@@ -3,6 +3,7 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     @State private var activeTab: LTab = .alarms
+    @State private var showBumpDemo = false
 
     var body: some View {
         @Bindable var appState = appState
@@ -22,6 +23,17 @@ struct MainTabView: View {
             LTabBar(active: $activeTab)
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("--bump-demo") { showBumpDemo = true }
+        }
+        .fullScreenCover(isPresented: $showBumpDemo) {
+            BumpStageView(sendOff: "Feet on the floor. Go get that run.", fistWidthFraction: 0.65,
+                          haptic: .thudClick,
+                          choice: { var r = BumpRandomizer(); return r.choose(removalOverride: nil, patternOverride: nil, shapesOverride: nil, lastRemoval: nil) }(),
+                          snoozeLabel: "Snooze 3m", isDemo: false,
+                          onBump: {}, onFinished: { showBumpDemo = false }, onSnooze: { showBumpDemo = false })
+                .preferredColorScheme(.dark)
+        }
         .fullScreenCover(item: $appState.activeSession) { session in
             // .id(session.id): a re-trigger while a conversation is already
             // presented must rebuild the view (fresh view model, fresh

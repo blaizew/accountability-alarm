@@ -396,7 +396,7 @@ struct ConversationView: View {
 
 // MARK: - Single message row
 
-private struct LMessage: View {
+struct LMessage: View {
     let message: ConversationMessage
     let index: Int
 
