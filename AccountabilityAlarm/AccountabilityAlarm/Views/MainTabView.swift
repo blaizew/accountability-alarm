@@ -38,7 +38,7 @@ struct MainTabView: View {
             // .id(session.id): a re-trigger while a conversation is already
             // presented must rebuild the view (fresh view model, fresh
             // setup(), alarm silenced) rather than reuse the stale one.
-            ConversationView(alarmId: session.alarmId)
+            ConversationView(alarmId: session.alarmId, isRehearsal: session.isRehearsal)
                 .id(session.id)
                 .preferredColorScheme(.dark)
         }

@@ -3,6 +3,7 @@ import SwiftData
 
 struct ConversationView: View {
     let alarmId: UUID
+    let isRehearsal: Bool
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -31,8 +32,9 @@ struct ConversationView: View {
 
     enum Mode { case voice, text }
 
-    init(alarmId: UUID) {
+    init(alarmId: UUID, isRehearsal: Bool = false) {
         self.alarmId = alarmId
+        self.isRehearsal = isRehearsal
     }
 
     private var elapsedString: String {
@@ -43,6 +45,7 @@ struct ConversationView: View {
     private var showStage: Bool { vm.actionAuthorized && bumpChoice != nil }
 
     private var alarm: Alarm? {
+        if isRehearsal { return appState.rehearsalAlarm }
         let id = alarmId
         let descriptor = FetchDescriptor<Alarm>(predicate: #Predicate { $0.id == id })
         return try? modelContext.fetch(descriptor).first
@@ -72,7 +75,16 @@ struct ConversationView: View {
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(!vm.isCompleted)
         .onAppear {
-            vm.setup(alarmId: alarmId, context: modelContext)
+            if isRehearsal {
+                if let rehearsalAlarm = appState.rehearsalAlarm {
+                    vm.setup(alarm: rehearsalAlarm, isRehearsal: true, context: modelContext)
+                } else {
+                    appState.dismissAlarm()
+                    dismiss()
+                }
+            } else {
+                vm.setup(alarmId: alarmId, context: modelContext)
+            }
             Task {
                 _ = await speech.requestPermission()
                 // Pre-warm the audio session so the first mic tap captures
@@ -149,10 +161,21 @@ struct ConversationView: View {
         HStack {
             HStack(spacing: 5) {
                 L.Dot(size: 5, color: L.Palette.fg)
-                Text("ALARM FIRING · \(elapsedString)")
+                Text("\(isRehearsal ? "REHEARSAL" : "ALARM FIRING") · \(elapsedString)")
                     .kicker(L.Palette.muted)
             }
             Spacer()
+            if isRehearsal {
+                Button {
+                    tts.stop()
+                    speech.cancelListening()
+                    appState.dismissAlarm()
+                    dismiss()
+                } label: {
+                    Text("END").kicker(L.Palette.muted)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, L.Space.pageH)
         .padding(.vertical, 8)
