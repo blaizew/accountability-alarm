@@ -39,6 +39,9 @@ struct ConversationView: View {
         String(format: "%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60)
     }
 
+    /// One value drives both the stage/chat branch and its cross-fade.
+    private var showStage: Bool { vm.actionAuthorized && bumpChoice != nil }
+
     private var alarm: Alarm? {
         let id = alarmId
         let descriptor = FetchDescriptor<Alarm>(predicate: #Predicate { $0.id == id })
@@ -53,7 +56,7 @@ struct ConversationView: View {
                 topBar
                 if let alarm { alarmHeader(alarm) }
 
-                if vm.actionAuthorized, let choice = bumpChoice {
+                if showStage, let choice = bumpChoice {
                     bumpStage(choice)
                         .transition(.opacity)
                 } else {
@@ -63,7 +66,7 @@ struct ConversationView: View {
                         .transition(.opacity)
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: vm.actionAuthorized)
+            .animation(.easeInOut(duration: 0.3), value: showStage)
         }
         .foregroundStyle(L.Palette.fg)
         .preferredColorScheme(.dark)
@@ -89,7 +92,11 @@ struct ConversationView: View {
         .onChange(of: vm.actionAuthorized) { _, authorized in
             // Pick the bump's look once per authorization, so the stage
             // never re-rolls on a redraw.
-            guard authorized, bumpChoice == nil else { return }
+            guard authorized else { return }
+            // The stage replaces the input row; a live listen must not
+            // auto-send a hidden turn after "Do not reply."
+            speech.cancelListening()
+            guard bumpChoice == nil else { return }
             var r = BumpRandomizer()
             bumpChoice = r.choose(removalOverride: FistRemoval(rawValue: bumpRemoval),
                                   patternOverride: ConfettiPattern(rawValue: bumpPattern),
@@ -109,7 +116,7 @@ struct ConversationView: View {
             // while the user thought they were still recording. Send what
             // was captured instead of letting the next mic tap wipe it.
             if wasListening, !isListening, speech.endedUnexpectedly,
-               !speech.transcript.isEmpty, !vm.isCompleted {
+               !speech.transcript.isEmpty, !vm.isCompleted, !vm.actionAuthorized {
                 vm.inputText = speech.transcript
                 Task { @MainActor in
                     await vm.sendMessage(context: modelContext)

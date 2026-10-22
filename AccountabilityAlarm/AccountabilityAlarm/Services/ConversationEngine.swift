@@ -371,8 +371,8 @@ final class ConversationEngine {
         - Only keep pushing when the answer is a hedge or a delay ("in a moment", "soon",
           "after this", "yeah but"). Ask ONE short question at most, then accept the next
           yes.
-        - If the user is annoyed or tells you to back off, back off: authorize and say
-          "Okay." Do not argue or explain your job.
+        - If the user is annoyed or tells you to back off, back off: call authorize_action and
+          write a one-line send-off tied to what they committed to. Do not argue or explain your job.
         - Push back at least once when the user is dismissive before accepting refusal via
           mark_overridden — unless they cite a legitimate emergency or one of their listed exception cases.
         - The Snooze button is currently \(snoozeButtonMinutes) minutes. Only raise via
