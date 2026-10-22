@@ -129,6 +129,9 @@ private struct SettingsRow: View {
                             .foregroundStyle(selected ? L.Palette.fg : L.Palette.muted)
                         Spacer(minLength: 0)
                     }
+                    .padding(.leading, L.Space.pageH)
+                    .padding(.trailing, previewAction == nil ? L.Space.pageH : 0)
+                    .padding(.vertical, 11)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -139,10 +142,9 @@ private struct SettingsRow: View {
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.plain)
+                    .padding(.trailing, L.Space.pageH)
                 }
             }
-            .padding(.horizontal, L.Space.pageH)
-            .padding(.vertical, 11)
             L.Palette.hair.frame(height: 1)
         }
     }
