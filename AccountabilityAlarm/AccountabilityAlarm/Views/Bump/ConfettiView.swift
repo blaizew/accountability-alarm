@@ -36,6 +36,7 @@ struct ConfettiView: View {
         var life: TimeInterval
         var phase: Double
         var wobble: Double
+        var gravityScale: Double
     }
 
     /// Reference holder so the draw closure can create and advance particles
@@ -80,7 +81,7 @@ struct ConfettiView: View {
             if age < 0 { continue }
             let step = min(dt, age) // a particle born mid-frame only moves since birth
             var p = sim.particles[i]
-            p.velocity.dy += 900 * step
+            p.velocity.dy += 900 * p.gravityScale * step
             let wob = sin(t * 6 + p.phase) * 30 * p.wobble
             p.velocity.dx *= drag
             p.velocity.dy *= drag
@@ -123,12 +124,12 @@ struct ConfettiView: View {
         }
 
         func make(at pt: CGPoint, vx: Double, vy: Double, birth: TimeInterval,
-                  life: TimeInterval, wobble: Double) -> Particle {
+                  life: TimeInterval, wobble: Double, gravityScale: Double = 1) -> Particle {
             Particle(birth: birth, position: pt, velocity: CGVector(dx: vx, dy: vy),
                      rotation: .random(in: 0..<(2 * .pi)), spin: .random(in: -8...8),
                      shapeIndex: Int.random(in: 0..<1000), color: colors.randomElement()!,
-                     size: CGFloat(size) * .random(in: 7...13), life: life,
-                     phase: .random(in: 0..<(2 * .pi)), wobble: wobble)
+                     size: CGFloat(size) * .random(in: 7...13), life: min(life, Self.duration - birth),
+                     phase: .random(in: 0..<(2 * .pi)), wobble: wobble, gravityScale: gravityScale)
         }
 
         switch pattern {
@@ -149,7 +150,7 @@ struct ConfettiView: View {
             for _ in 0..<count(150) {
                 out.append(make(at: CGPoint(x: .random(in: 0...max(width, 1)), y: -20),
                                 vx: 0, vy: .random(in: 150...300),
-                                birth: .random(in: 0...1.2), life: .random(in: 1.4...2.0), wobble: 2))
+                                birth: .random(in: 0...1.2), life: .random(in: 1.4...2.0), wobble: 2, gravityScale: 0.15))
             }
             burst(30, at: origin, birth: 0)
         }
