@@ -57,6 +57,16 @@ enum Constants {
     /// the banner.
     static let downtimeNoticeAcknowledgedKey = "downtimeNoticeAcknowledged"
 
+    /// Fist bump settings. Picker values store the raw enum value, or "random".
+    static let bumpHapticKey = "bumpHaptic"
+    static let bumpRemovalKey = "bumpRemoval"
+    static let bumpConfettiPatternKey = "bumpConfettiPattern"
+    static let bumpConfettiShapesKey = "bumpConfettiShapes"
+    /// Fist width as a fraction of screen width (Double, default 0.65).
+    static let bumpFistWidthKey = "bumpFistWidth"
+    /// Raw value of the previous bump removal, to avoid repeating it.
+    static let bumpLastRemovalKey = "bumpLastRemoval"
+
     enum NotificationCategory {
         static let alarm = "ALARM_CATEGORY"
         static let morningCheckin = "MORNING_CHECKIN"
