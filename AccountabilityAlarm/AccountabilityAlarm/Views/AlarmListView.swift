@@ -80,6 +80,11 @@ struct AlarmListView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(L.Palette.bg)
                         .listRowSeparator(.hidden)
+
+                    seeHowItWorksRow
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(L.Palette.bg)
+                        .listRowSeparator(.hidden)
                 }
             }
             .listStyle(.plain)
@@ -101,7 +106,9 @@ struct AlarmListView: View {
                 .preferredColorScheme(.dark)
         }
         .onAppear {
-            if ProcessInfo.processInfo.arguments.contains("--open-settings") { showSettings = true }
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("--open-settings") { showSettings = true }
+            if args.contains("--rehearse-sample") { appState.rehearseSample() }
         }
         .sheet(item: $alarmToEdit) { alarm in
             AlarmEditView(alarm: alarm)
@@ -126,6 +133,20 @@ struct AlarmListView: View {
     }
 
     // MARK: - Subviews
+
+    private var seeHowItWorksRow: some View {
+        Button {
+            appState.rehearseSample()
+        } label: {
+            HStack(spacing: 8) {
+                L.PlayTri(size: 8, color: L.Palette.muted)
+                Text("SEE HOW IT WORKS").kicker(L.Palette.muted)
+            }
+            .padding(.horizontal, L.Space.pageH)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+    }
 
     private var newCommitmentButton: some View {
         VStack {
@@ -165,8 +186,8 @@ struct AlarmListView: View {
     }
 
     private func fireAlarm(_ alarm: Alarm) {
-        // Dev affordance: opens the Conversation.
-        appState.triggerAlarm(alarmId: alarm.id)
+        // Rehearse: opens the conversation with no ledger writes.
+        appState.rehearse(alarm: alarm)
     }
 
     static func currentClock() -> String {
@@ -258,6 +279,7 @@ struct LAlarmRow: View {
                             .overlay(Rectangle().stroke(L.Palette.hair2, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Rehearse")
                 }
                 togglePill
             }
