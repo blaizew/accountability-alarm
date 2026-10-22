@@ -135,7 +135,8 @@ final class ConversationEngine {
     /// snooze: correct arithmetic from 9:30, and 12 minutes too long.
     ///
     /// `now` is injected so the output can be checked against fixed inputs.
-    func buildTimeContext(alarm: Alarm, event: AlarmEvent?, now: Date = Date()) -> String {
+    func buildTimeContext(alarm: Alarm, event: AlarmEvent?, now: Date = Date(), firedAt: Date? = nil) -> String {
+        let fired = firedAt ?? event?.firedAt
         let dayFmt = DateFormatter()
         dayFmt.dateFormat = "EEEE MMMM d"
 
@@ -150,8 +151,8 @@ final class ConversationEngine {
         // time rather than being pinned above them.
         var rows: [(Date, String)] = []
 
-        if let firedAt = event?.firedAt {
-            rows.append((firedAt, "  \(Self.clock(firedAt))   alarm rang — chain started"))
+        if let fired {
+            rows.append((fired, "  \(Self.clock(fired))   alarm rang — chain started"))
         }
         for record in event?.snoozeLog ?? [] {
             let stamp = record.isApproximate ? "~\(Self.clock(record.at))" : " \(Self.clock(record.at))"
@@ -165,8 +166,8 @@ final class ConversationEngine {
         }
 
         var nowLine = "  \(Self.clock(now))   ← now"
-        if let firedAt = event?.firedAt {
-            let mins = Int(now.timeIntervalSince(firedAt) / 60)
+        if let fired {
+            let mins = Int(now.timeIntervalSince(fired) / 60)
             if mins > 0 { nowLine += ", \(mins) min past the alarm" }
         }
         lines.append(nowLine)
@@ -191,7 +192,8 @@ final class ConversationEngine {
         alarm: Alarm,
         event: AlarmEvent?,
         snoozeButtonMinutes: Int,
-        now: Date = Date()
+        now: Date = Date(),
+        firedAt: Date? = nil
     ) -> String {
         var parts: [String] = []
 
@@ -214,7 +216,7 @@ final class ConversationEngine {
 
         // Everything time-bearing the app knows, stamped. Rebuilt on every
         // assistant turn (runAssistantTurn), so "now" stays current for free.
-        parts.append(buildTimeContext(alarm: alarm, event: event, now: now))
+        parts.append(buildTimeContext(alarm: alarm, event: event, now: now, firedAt: firedAt))
 
         // Five-box commitment fields. Each box is passed with its question
         // title so the LLM understands the framing. Empty boxes are skipped.

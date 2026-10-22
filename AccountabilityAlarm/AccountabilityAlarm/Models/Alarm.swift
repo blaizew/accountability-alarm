@@ -75,3 +75,31 @@ final class Alarm {
         self.createdAt = Date()
     }
 }
+
+extension Alarm {
+    /// A new, un-inserted Alarm for rehearsal: same commitment text, firing
+    /// time set to `now`. Excludes events, AlarmKit ids, and snooze state.
+    func rehearsalCopy(now: Date = Date()) -> Alarm {
+        let cal = Calendar.current
+        let copy = Alarm(
+            label: label,
+            hour: cal.component(.hour, from: now),
+            minute: cal.component(.minute, from: now)
+        )
+        copy.reasonText = reasonText
+        copy.reasonAudioPath = reasonAudioPath
+        copy.desiredBehavior = desiredBehavior
+        copy.whyWantThis = whyWantThis
+        copy.positiveOutcome = positiveOutcome
+        copy.negativeOutcome = negativeOutcome
+        copy.longTermImpact = longTermImpact
+        copy.exceptionCases = exceptionCases
+        copy.targetSleepHours = targetSleepHours
+        copy.nextMorningEvent = nextMorningEvent
+        copy.nextMorningEventHour = nextMorningEventHour
+        copy.nextMorningEventMinute = nextMorningEventMinute
+        copy.snoozeMinutes = snoozeMinutes
+        copy.repeatDays = repeatDays
+        return copy
+    }
+}

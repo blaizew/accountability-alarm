@@ -13,19 +13,39 @@ final class AppState {
     struct ConversationSession: Identifiable, Equatable {
         let id: Int
         let alarmId: UUID
+        let isRehearsal: Bool
     }
 
     var activeSession: ConversationSession?
     private var sessionCounter = 0
 
+    /// In-memory copy of an alarm being rehearsed. Never inserted into a
+    /// ModelContext. Cleared when the conversation is dismissed.
+    private(set) var rehearsalAlarm: Alarm?
+
     var activeAlarmId: UUID? { activeSession?.alarmId }
 
     func triggerAlarm(alarmId: UUID) {
         sessionCounter += 1
-        activeSession = ConversationSession(id: sessionCounter, alarmId: alarmId)
+        activeSession = ConversationSession(id: sessionCounter, alarmId: alarmId, isRehearsal: false)
+    }
+
+    func rehearse(alarm: Alarm) {
+        startRehearsal(with: alarm.rehearsalCopy())
+    }
+
+    func rehearseSample() {
+        startRehearsal(with: RehearsalSample.makeAlarm())
+    }
+
+    private func startRehearsal(with copy: Alarm) {
+        rehearsalAlarm = copy
+        sessionCounter += 1
+        activeSession = ConversationSession(id: sessionCounter, alarmId: copy.id, isRehearsal: true)
     }
 
     func dismissAlarm() {
         activeSession = nil
+        rehearsalAlarm = nil
     }
 }
