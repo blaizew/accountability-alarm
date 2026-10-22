@@ -154,7 +154,7 @@ Built in code, never saved. Values:
 | Field | Value |
 |---|---|
 | label | `Morning run` |
-| hour / minute | 6 / 30 |
+| hour / minute | the current clock (see "The copy's time is now") |
 | snoozeMinutes | 5 |
 | reasonText | `Get up, put on my shoes, and run 5k before work.` |
 | desiredBehavior | same as reasonText |
