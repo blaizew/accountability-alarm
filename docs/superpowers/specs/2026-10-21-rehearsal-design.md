@@ -164,6 +164,8 @@ Built in code, never saved. Values:
 | longTermImpact | `Running four mornings a week is how I stay healthy for the people who count on me.` |
 | exceptionCases | empty |
 
+From noon on, the sample is "Lights out" (phone on the charger, into bed) instead, so an evening demo makes sense; values are in `RehearsalSample.swift`.
+
 ### Debug hook
 
 A `--rehearse-sample` launch argument starts the sample rehearsal on launch,
@@ -180,8 +182,8 @@ so the simulator can screenshot the conversation without taps.
   confirm `ZALARM` has no `Morning run` row.
 - Real alarm path unchanged: a normal launch still fetches the alarm by id
   and inserts an `AlarmEvent` as before (reviewer reads the diff for this).
-- Device: install on bPhone2; Blaize rehearses a real alarm from its edit
-  sheet, talks to the Coach, bumps the fist, then checks History shows no
+- Device: install on bPhone2; Blaize rehearses a real alarm from the play glyph on its
+  row, talks to the Coach, bumps the fist, then checks History shows no
   new entry.
 
 ## Left to the builder

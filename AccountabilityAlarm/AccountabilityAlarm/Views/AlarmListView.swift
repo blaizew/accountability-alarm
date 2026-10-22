@@ -144,6 +144,7 @@ struct AlarmListView: View {
             }
             .padding(.horizontal, L.Space.pageH)
             .padding(.vertical, 12)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

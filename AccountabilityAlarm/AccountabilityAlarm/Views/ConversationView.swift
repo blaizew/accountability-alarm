@@ -148,7 +148,7 @@ struct ConversationView: View {
             guard done, vm.autoDismissOnCompletion else { return }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
-                appState.dismissAlarm()
+                if appState.activeSession?.alarmId == alarmId { appState.dismissAlarm() }
                 dismiss()
             }
         }
@@ -178,7 +178,7 @@ struct ConversationView: View {
                     dismiss()
                 } label: {
                     Text("END").kicker(L.Palette.muted)
-                        .padding(8)
+                        .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
