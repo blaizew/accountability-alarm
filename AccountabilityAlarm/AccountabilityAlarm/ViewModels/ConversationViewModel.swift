@@ -68,6 +68,7 @@ final class ConversationViewModel {
     /// Rehearsal entry: same opening turn as a real ring, but nothing is
     /// inserted, saved, or scheduled. Kept separate from the real path.
     func setup(alarm: Alarm, isRehearsal: Bool, context: ModelContext) {
+        precondition(isRehearsal, "setup(alarm:) is the rehearsal entry point")
         guard !didSetup else { return }
         didSetup = true
         self.isRehearsal = isRehearsal

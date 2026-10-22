@@ -19,6 +19,8 @@ struct ConversationView: View {
 
     @State private var mode: Mode = .voice
     @State private var elapsedSeconds: Int = 0
+    @State private var timerTask: Task<Void, Never>?
+    @State private var rehearsalAlarmSnapshot: Alarm?
 
     @State private var bumpChoice: BumpChoice?
     @AppStorage(Constants.bumpHapticKey) private var hapticRaw = BumpHaptic.defaultValue.rawValue
@@ -45,7 +47,7 @@ struct ConversationView: View {
     private var showStage: Bool { vm.actionAuthorized && bumpChoice != nil }
 
     private var alarm: Alarm? {
-        if isRehearsal { return appState.rehearsalAlarm }
+        if isRehearsal { return rehearsalAlarmSnapshot ?? appState.rehearsalAlarm }
         let id = alarmId
         let descriptor = FetchDescriptor<Alarm>(predicate: #Predicate { $0.id == id })
         return try? modelContext.fetch(descriptor).first
@@ -77,10 +79,12 @@ struct ConversationView: View {
         .onAppear {
             if isRehearsal {
                 if let rehearsalAlarm = appState.rehearsalAlarm {
+                    rehearsalAlarmSnapshot = rehearsalAlarm
                     vm.setup(alarm: rehearsalAlarm, isRehearsal: true, context: modelContext)
                 } else {
                     appState.dismissAlarm()
                     dismiss()
+                    return
                 }
             } else {
                 vm.setup(alarmId: alarmId, context: modelContext)
@@ -95,6 +99,7 @@ struct ConversationView: View {
             startTimers()
         }
         .onDisappear {
+            timerTask?.cancel()
             tts.stop()
             // Unconditional teardown — stopListening() no-ops while a prior
             // stop is finalizing, which left the record audio session live
@@ -173,12 +178,14 @@ struct ConversationView: View {
                     dismiss()
                 } label: {
                     Text("END").kicker(L.Palette.muted)
+                        .padding(8)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, L.Space.pageH)
-        .padding(.vertical, 8)
+        .padding(.vertical, isRehearsal ? 0 : 8)
         .overlay(alignment: .bottom) { L.Palette.hair.frame(height: 1) }
     }
 
@@ -442,7 +449,8 @@ struct ConversationView: View {
 
     private func startTimers() {
         elapsedSeconds = 3
-        Task { @MainActor in
+        timerTask?.cancel()
+        timerTask = Task { @MainActor in
             while !Task.isCancelled, !vm.isCompleted {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 elapsedSeconds += 1
