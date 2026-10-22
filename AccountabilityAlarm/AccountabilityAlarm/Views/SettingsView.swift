@@ -6,6 +6,8 @@ struct SettingsView: View {
     @AppStorage(Constants.bumpConfettiPatternKey) private var pattern = "random"
     @AppStorage(Constants.bumpConfettiShapesKey) private var shapes = "random"
     @AppStorage(Constants.bumpFistWidthKey) private var fistWidth = 0.65
+    @AppStorage(Constants.bumpLastRemovalKey) private var lastRemovalRaw = ""
+    @Environment(AppState.self) private var appState
 
     @State private var showDemo = false
     @State private var demoChoice: BumpChoice?
@@ -63,12 +65,15 @@ struct SettingsView: View {
         .background(L.Palette.bg.ignoresSafeArea())
         .foregroundStyle(L.Palette.fg)
         .onAppear { HapticService.shared.prepare() }
+        .onChange(of: appState.activeSession) { _, s in
+            if s != nil { showDemo = false }
+        }
         .fullScreenCover(isPresented: $showDemo) {
             if let demoChoice {
                 BumpStageView(sendOff: "Feet on the floor. Go get that run.",
                               fistWidthFraction: demoWidth, haptic: demoHaptic, choice: demoChoice,
                               snoozeLabel: "", isDemo: true,
-                              onBump: {}, onFinished: { showDemo = false }, onSnooze: {})
+                              onBump: { lastRemovalRaw = demoChoice.removal.rawValue }, onFinished: { showDemo = false }, onSnooze: {})
                     .preferredColorScheme(.dark)
             }
         }
@@ -79,7 +84,7 @@ struct SettingsView: View {
         demoChoice = r.choose(removalOverride: FistRemoval(rawValue: removal),
                               patternOverride: ConfettiPattern(rawValue: pattern),
                               shapesOverride: ConfettiShapes(rawValue: shapes),
-                              lastRemoval: nil)
+                              lastRemoval: FistRemoval(rawValue: lastRemovalRaw))
         demoHaptic = BumpHaptic(rawValue: haptic) ?? .defaultValue
         demoWidth = fistWidth
         showDemo = true
@@ -139,7 +144,8 @@ private struct SettingsRow: View {
                 if let previewAction {
                     Button(action: previewAction) {
                         Text("PREVIEW").kicker(L.Palette.accent)
-                            .padding(.vertical, 4)
+                            .padding(.vertical, 11)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, L.Space.pageH)

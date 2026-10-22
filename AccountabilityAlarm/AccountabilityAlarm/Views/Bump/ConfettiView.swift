@@ -46,7 +46,8 @@ struct ConfettiView: View {
         var start: Date?
         var lastT: TimeInterval = 0
         var spawned = false
-        var symbols: [Image] = []
+        var symbolNames: [String] = []
+        var colors: [Color] = []
     }
 
     @State private var sim = Simulation()
@@ -69,9 +70,12 @@ struct ConfettiView: View {
 
         if !sim.spawned {
             sim.spawned = true
-            sim.symbols = ConfettiShapeDrawing.symbolNames(for: shapes).map { Image(systemName: $0) }
+            sim.symbolNames = ConfettiShapeDrawing.symbolNames(for: shapes)
             sim.particles = makeParticles(width: canvasSize.width)
+            sim.colors = Array(Set(sim.particles.map(\.color)))
         }
+        // Resolve each (symbol, color) pair once per frame, not once per particle.
+        let symbols = ConfettiShapeDrawing.SymbolCache(ctx: ctx, names: sim.symbolNames, colors: sim.colors)
         let dt = min(max(t - sim.lastT, 0), 0.05)
         sim.lastT = t
         let drag = pow(0.98, dt * 60)
@@ -94,13 +98,12 @@ struct ConfettiView: View {
             let fadeStart = p.life * 0.8
             let alpha = age <= fadeStart ? 1.0 : max(0, 1 - (age - fadeStart) / (p.life - fadeStart))
             let r = CGRect(x: -p.size / 2, y: -p.size / 2, width: p.size, height: p.size)
-            ctx.drawLayer { layer in
-                layer.opacity = alpha
-                layer.translateBy(x: p.position.x, y: p.position.y)
-                layer.rotate(by: .radians(p.rotation))
-                ConfettiShapeDrawing.draw(shapes, index: p.shapeIndex, in: &layer, rect: r,
-                                          color: p.color, symbols: sim.symbols)
-            }
+            var c = ctx // value copy isolates transform and opacity without a transparency layer
+            c.opacity = alpha
+            c.translateBy(x: p.position.x, y: p.position.y)
+            c.rotate(by: .radians(p.rotation))
+            ConfettiShapeDrawing.draw(shapes, index: p.shapeIndex, in: &c, rect: r,
+                                      color: p.color, symbols: symbols)
         }
     }
 

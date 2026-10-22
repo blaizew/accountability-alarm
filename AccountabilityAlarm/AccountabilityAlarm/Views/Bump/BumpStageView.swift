@@ -66,6 +66,8 @@ struct BumpStageView: View {
 
                     Text("(bump the fist)")
                         .font(L.Mono.font(11))
+                        .tracking(0.6)
+                        .textCase(.uppercase)
                         .foregroundStyle(L.Palette.dim)
                         .opacity(hintVisible && !bumped ? 1 : 0)
                         .animation(.easeOut(duration: 0.4), value: hintVisible)
@@ -101,7 +103,7 @@ struct BumpStageView: View {
                 .buttonStyle(.plain)
                 .disabled(resolved)
                 .padding(.horizontal, L.Space.pageH)
-                .padding(.bottom, 12)
+                .padding(.bottom, 26)
                 .opacity(bumped ? 0 : 1)
                 .animation(.easeOut(duration: 0.4), value: bumped)
             }

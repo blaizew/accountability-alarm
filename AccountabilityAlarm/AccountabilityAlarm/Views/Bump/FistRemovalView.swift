@@ -197,13 +197,12 @@ struct FistRemovalView: View {
 
             let rect = CGRect(x: -p.cell.width / 2, y: -p.cell.height / 2,
                               width: p.cell.width, height: p.cell.height)
-            ctx.drawLayer { layer in
-                layer.opacity = alpha
-                layer.translateBy(x: center.x + p.position.x, y: center.y + p.position.y)
-                layer.rotate(by: .radians(p.rotation))
-                if !isShatter { layer.clip(to: Path(ellipseIn: rect)) }
-                layer.draw(p.image, in: rect)
-            }
+            var c = ctx // value copy isolates transform, opacity and clip without a transparency layer
+            c.opacity = alpha
+            c.translateBy(x: center.x + p.position.x, y: center.y + p.position.y)
+            c.rotate(by: .radians(p.rotation))
+            if !isShatter { c.clip(to: Path(ellipseIn: rect)) }
+            c.draw(p.image, in: rect)
         }
     }
 

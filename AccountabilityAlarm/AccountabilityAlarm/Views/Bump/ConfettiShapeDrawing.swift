@@ -38,9 +38,30 @@ enum ConfettiShapeDrawing {
         }
     }
 
-    /// `symbols` must match `symbolNames(for: shapes)` in order and count.
+    /// Per-frame table of resolved template symbols, one per (symbol, color) pair.
+    struct SymbolCache {
+        private struct Key: Hashable { let index: Int; let color: Color }
+        private var table: [Key: GraphicsContext.ResolvedImage] = [:]
+
+        /// `names` must be `symbolNames(for:)` for the shapes in use.
+        init(ctx: GraphicsContext, names: [String], colors: [Color]) {
+            for (i, name) in names.enumerated() {
+                for color in colors {
+                    var img = ctx.resolve(Image(systemName: name).renderingMode(.template))
+                    img.shading = .color(color)
+                    table[Key(index: i, color: color)] = img
+                }
+            }
+        }
+
+        func image(at index: Int, color: Color) -> GraphicsContext.ResolvedImage? {
+            table[Key(index: index, color: color)]
+        }
+    }
+
+    /// `symbols` must have been built from `symbolNames(for: shapes)`.
     static func draw(_ shapes: ConfettiShapes, index: Int, in ctx: inout GraphicsContext,
-                     rect: CGRect, color: Color, symbols: [Image]) {
+                     rect: CGRect, color: Color, symbols: SymbolCache) {
         let list = kinds(for: shapes)
         let shading = GraphicsContext.Shading.color(color)
         let w = rect.width, h = rect.height
@@ -94,10 +115,11 @@ enum ConfettiShapeDrawing {
             let lw = max(1, w * frac)
             ctx.stroke(Path(ellipseIn: rect.insetBy(dx: lw / 2, dy: lw / 2)), with: shading, lineWidth: lw)
         case .symbol(let i):
-            guard i < symbols.count else { return }
-            var img = ctx.resolve(symbols[i].renderingMode(.template))
-            img.shading = shading
-            ctx.draw(img, in: rect)
+            guard let img = symbols.image(at: i, color: color) else { return }
+            let s = min(rect.width / img.size.width, rect.height / img.size.height)
+            let fit = CGRect(x: rect.midX - img.size.width * s / 2, y: rect.midY - img.size.height * s / 2,
+                             width: img.size.width * s, height: img.size.height * s)
+            ctx.draw(img, in: fit)
         }
     }
 }

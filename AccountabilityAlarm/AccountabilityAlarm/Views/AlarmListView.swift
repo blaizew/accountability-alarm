@@ -30,6 +30,7 @@ struct AlarmListView: View {
                             .font(.system(size: 13))
                             .foregroundStyle(L.Palette.muted)
                             .padding(.leading, 4)
+                            .frame(minWidth: 32, minHeight: 32)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -91,6 +92,9 @@ struct AlarmListView: View {
         .sheet(isPresented: $showNew) {
             AlarmEditView()
                 .preferredColorScheme(.dark)
+        }
+        .onChange(of: appState.activeSession) { _, session in
+            if session != nil { showSettings = false }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()

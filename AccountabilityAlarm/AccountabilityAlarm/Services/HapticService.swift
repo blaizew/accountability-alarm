@@ -14,7 +14,6 @@ final class HapticService {
     /// Creates and starts the Core Haptics engine once. Safe to call many times.
     func prepare() {
         guard !didPrepare else { return }
-        didPrepare = true
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
         do {
             let engine = try CHHapticEngine()
@@ -26,6 +25,7 @@ final class HapticService {
             }
             try engine.start()
             self.engine = engine
+            didPrepare = true
         } catch {
             self.engine = nil
         }

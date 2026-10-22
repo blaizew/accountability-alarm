@@ -96,6 +96,7 @@ struct ConversationView: View {
             // The stage replaces the input row; a live listen must not
             // auto-send a hidden turn after "Do not reply."
             speech.cancelListening()
+            textInputFocused = false
             guard bumpChoice == nil else { return }
             var r = BumpRandomizer()
             bumpChoice = r.choose(removalOverride: FistRemoval(rawValue: bumpRemoval),
@@ -239,7 +240,7 @@ struct ConversationView: View {
                 lastRemovalRaw = choice.removal.rawValue
             },
             onFinished: {
-                appState.dismissAlarm()
+                if appState.activeSession?.alarmId == alarmId { appState.dismissAlarm() }
                 dismiss()
             },
             onSnooze: {
