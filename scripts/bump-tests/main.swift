@@ -38,7 +38,7 @@ struct Tests {
         var seenGlyphs = Set<String>()
         for _ in 0..<300 { seenGlyphs.insert(r.choose(glyphOverride: nil, removalOverride: nil, patternOverride: nil, shapesOverride: nil, lastRemoval: nil).glyph.rawValue) }
         check(seenGlyphs.count == BumpGlyph.allCases.count, "random glyph covers all three")
-        check(BumpGlyph.handLeft.mirrored && !BumpGlyph.handRight.mirrored && !BumpGlyph.fist.mirrored, "only the left hand is mirrored")
+        check(BumpGlyph.handRight.mirrored && !BumpGlyph.handLeft.mirrored && !BumpGlyph.fist.mirrored, "only the right hand is mirrored")
         // Phase
         check(!BumpPhase.entering.canBump && BumpPhase.ready.canBump && !BumpPhase.bumped.canBump, "only ready can bump")
         // Send-off

@@ -91,8 +91,8 @@ also the first of a family of gesture interactions (high five next).
    - The **hint**: after 2 s with no tap, "(bump the fist)" fades in under
      the fist, in `L.Mono.font` caps, dim color.
   - There are three glyphs: fist, left hand, and right hand. Each bump picks
-    one at random unless one is pinned in Settings under HAND. The left hand
-    is the mirrored ✋. For hands the hint reads "(high five)". Haptic,
+    one at random unless one is pinned in Settings under HAND. Apple's ✋ reads as a
+    left hand (thumb on the viewer's right); the right hand is it mirrored. For hands the hint reads "(high five)". Haptic,
     confetti, removal, and size apply to any glyph.
    - The **Snooze** button: one button, full width, same look as today's
      snooze button, same action (`resolveSnooze`, dismiss alarm, close).

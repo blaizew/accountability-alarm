@@ -77,9 +77,10 @@ enum BumpGlyph: String, CaseIterable {
     /// Visible ink height of the fist as a multiple of the frame width (measured).
     static let fistInkHeightFactor: CGFloat = 0.875
 
-    /// The emoji drawn. Apple's ✋ is a right palm; the left hand is the same glyph mirrored.
+    /// The emoji drawn. Apple's ✋ faces the viewer with the thumb on the viewer's right,
+    /// so it reads as a left hand; the right hand is the same glyph mirrored.
     var emoji: String { self == .fist ? "👊" : "✋" }
-    var mirrored: Bool { self == .handLeft }
+    var mirrored: Bool { self == .handRight }
     var label: String {
         switch self {
         case .fist: return "Fist"
