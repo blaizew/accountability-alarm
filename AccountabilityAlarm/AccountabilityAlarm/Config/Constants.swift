@@ -62,6 +62,8 @@ enum Constants {
     static let bumpRemovalKey = "bumpRemoval"
     static let bumpConfettiPatternKey = "bumpConfettiPattern"
     static let bumpConfettiShapesKey = "bumpConfettiShapes"
+    /// Which hand is shown: a BumpGlyph raw value, or "random".
+    static let bumpGlyphKey = "bumpGlyph"
     /// Fist width as a fraction of screen width (Double, default 0.65).
     static let bumpFistWidthKey = "bumpFistWidth"
     /// Raw value of the previous bump removal, to avoid repeating it.

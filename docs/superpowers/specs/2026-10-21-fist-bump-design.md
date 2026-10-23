@@ -90,6 +90,10 @@ also the first of a family of gesture interactions (high five next).
      "breathes": a slow 1.00 to 1.03 scale loop so it looks alive.
    - The **hint**: after 2 s with no tap, "(bump the fist)" fades in under
      the fist, in `L.Mono.font` caps, dim color.
+  - There are three glyphs: fist, left hand, and right hand. Each bump picks
+    one at random unless one is pinned in Settings under HAND. The left hand
+    is the mirrored ✋. For hands the hint reads "(high five)". Haptic,
+    confetti, removal, and size apply to any glyph.
    - The **Snooze** button: one button, full width, same look as today's
      snooze button, same action (`resolveSnooze`, dismiss alarm, close).
 4. The user taps the fist. The tap target is the fist's full frame. Taps
@@ -299,7 +303,7 @@ clock) opens `Views/SettingsView.swift` as a sheet. Sections:
 
 Keys live in `Config/Constants.swift` next to
 `downtimeNoticeAcknowledgedKey`. All stored with `@AppStorage`:
-`bumpHaptic`, `bumpRemoval`, `bumpConfettiPattern`, `bumpConfettiShapes`,
+`bumpHaptic`, `bumpGlyph`, `bumpRemoval`, `bumpConfettiPattern`, `bumpConfettiShapes`,
 `bumpFistWidth`, `bumpLastRemoval`.
 
 Style: same Ledger look as the rest of the app. Mono caps labels, hairline

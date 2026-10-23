@@ -29,7 +29,7 @@ struct MainTabView: View {
         .fullScreenCover(isPresented: $showBumpDemo) {
             BumpStageView(sendOff: "Feet on the floor. Go get that run.", fistWidthFraction: 0.65,
                           haptic: .thudClick,
-                          choice: { var r = BumpRandomizer(); return r.choose(removalOverride: nil, patternOverride: nil, shapesOverride: nil, lastRemoval: nil) }(),
+                          choice: { var r = BumpRandomizer(); return r.choose(glyphOverride: BumpGlyph(rawValue: UserDefaults.standard.string(forKey: Constants.bumpGlyphKey) ?? ""), removalOverride: nil, patternOverride: nil, shapesOverride: nil, lastRemoval: nil) }(),
                           snoozeLabel: "Snooze 3m", isDemo: false,
                           onBump: {}, onFinished: { showBumpDemo = false }, onSnooze: { showBumpDemo = false })
                 .preferredColorScheme(.dark)

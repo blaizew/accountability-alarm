@@ -24,6 +24,7 @@ struct ConversationView: View {
 
     @State private var bumpChoice: BumpChoice?
     @AppStorage(Constants.bumpHapticKey) private var hapticRaw = BumpHaptic.defaultValue.rawValue
+    @AppStorage(Constants.bumpGlyphKey) private var bumpGlyph = "random"
     @AppStorage(Constants.bumpRemovalKey) private var bumpRemoval = "random"
     @AppStorage(Constants.bumpConfettiPatternKey) private var bumpPattern = "random"
     @AppStorage(Constants.bumpConfettiShapesKey) private var bumpShapes = "random"
@@ -120,7 +121,8 @@ struct ConversationView: View {
             textInputFocused = false
             guard bumpChoice == nil else { return }
             var r = BumpRandomizer()
-            bumpChoice = r.choose(removalOverride: FistRemoval(rawValue: bumpRemoval),
+            bumpChoice = r.choose(glyphOverride: BumpGlyph(rawValue: bumpGlyph),
+                                  removalOverride: FistRemoval(rawValue: bumpRemoval),
                                   patternOverride: ConfettiPattern(rawValue: bumpPattern),
                                   shapesOverride: ConfettiShapes(rawValue: bumpShapes),
                                   lastRemoval: FistRemoval(rawValue: lastRemovalRaw))

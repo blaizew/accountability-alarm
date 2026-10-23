@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The fist-bump stage: the Coach's send-off, a 👊 that grows into the middle,
+/// The fist-bump stage: the Coach's send-off, a fist or a raised hand that grows into the middle,
 /// a tap target, then haptic + confetti + a removal animation.
 struct BumpStageView: View {
     static let dismissDelay: TimeInterval = 2.2
@@ -56,15 +56,15 @@ struct BumpStageView: View {
                 let width = CGFloat(fistWidthFraction) * geo.size.width
                 ZStack {
                     if bumped {
-                        FistRemovalView(style: choice.removal, emoji: "👊", width: width,
+                        FistRemovalView(style: choice.removal, glyph: choice.glyph, width: width,
                                         reduceMotion: reduceMotion, onFinished: {})
                     } else {
-                        FistView(width: width, phase: phase, reduceMotion: reduceMotion)
+                        FistView(glyph: choice.glyph, width: width, phase: phase, reduceMotion: reduceMotion)
                             .contentShape(Rectangle())
                             .onTapGesture { bump() }
                     }
 
-                    Text("(bump the fist)")
+                    Text(choice.glyph.hint)
                         .font(L.Mono.font(11))
                         .tracking(0.6)
                         .textCase(.uppercase)
@@ -73,7 +73,7 @@ struct BumpStageView: View {
                         .animation(.easeOut(duration: 0.4), value: hintVisible)
                         .animation(.easeOut(duration: 0.4), value: bumped)
                         .position(x: geo.size.width / 2,
-                                  y: geo.size.height / 2 + width * FistView.inkHeightFactor / 2 + 12 + 7)
+                                  y: geo.size.height / 2 + width * choice.glyph.inkHeightFactor / 2 + 12 + 7)
                         .allowsHitTesting(false)
 
                     if bumped && !reduceMotion {

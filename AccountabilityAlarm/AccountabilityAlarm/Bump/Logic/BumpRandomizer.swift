@@ -1,6 +1,7 @@
 import Foundation
 
 struct BumpChoice: Equatable {
+    let glyph: BumpGlyph
     let removal: FistRemoval
     let pattern: ConfettiPattern
     let shapes: ConfettiShapes
@@ -20,11 +21,13 @@ struct BumpRandomizer {
     }
 
     mutating func choose(
+        glyphOverride: BumpGlyph?,
         removalOverride: FistRemoval?,
         patternOverride: ConfettiPattern?,
         shapesOverride: ConfettiShapes?,
         lastRemoval: FistRemoval?
     ) -> BumpChoice {
+        let glyph = glyphOverride ?? BumpGlyph.allCases.randomElement(using: &rng) ?? .fist
         let removal: FistRemoval
         if let removalOverride {
             removal = removalOverride
@@ -41,6 +44,7 @@ struct BumpRandomizer {
             palette = ConfettiPalettes.site.randomElement(using: &rng) ?? ConfettiPalettes.house
         }
         return BumpChoice(
+            glyph: glyph,
             removal: removal,
             pattern: pattern,
             shapes: shapes,

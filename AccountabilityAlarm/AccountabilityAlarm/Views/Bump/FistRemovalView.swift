@@ -4,15 +4,15 @@ import SwiftUI
 /// Fills the space it is given and centers the fist in it.
 struct FistRemovalView: View {
     let style: FistRemoval
-    let emoji: String
+    let glyph: BumpGlyph
     let width: CGFloat
     let reduceMotion: Bool
     let onFinished: () -> Void
 
-    init(style: FistRemoval, emoji: String, width: CGFloat, reduceMotion: Bool,
+    init(style: FistRemoval, glyph: BumpGlyph, width: CGFloat, reduceMotion: Bool,
          onFinished: @escaping () -> Void) {
         self.style = style
-        self.emoji = emoji
+        self.glyph = glyph
         self.width = width
         self.reduceMotion = reduceMotion
         self.onFinished = onFinished
@@ -81,10 +81,11 @@ struct FistRemovalView: View {
     }
 
     private var fist: some View {
-        Text(emoji)
+        Text(glyph.emoji)
             .font(.system(size: width * FistView.fontFactor))
             .fixedSize()
             .frame(width: width, height: width)
+            .scaleEffect(x: glyph.mirrored ? -1 : 1, y: 1)
     }
 
     private var flashOverlay: some View {
@@ -107,7 +108,7 @@ struct FistRemovalView: View {
                 withAnimation(.linear(duration: 0.1)) { opacity = 0 }
             }
         case .dissolve, .shatter:
-            raster = EmojiRaster.image(emoji, pointSize: width * FistView.fontFactor)
+            raster = EmojiRaster.image(glyph.emoji, mirrored: glyph.mirrored, pointSize: width * FistView.fontFactor)
         case .recoil:
             withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) {
                 scale = 0.88
@@ -251,7 +252,7 @@ struct FistRemovalView: View {
 #Preview {
     ZStack {
         L.Palette.bg.ignoresSafeArea()
-        FistRemovalView(style: .shatter, emoji: "👊", width: 393 * 0.65,
+        FistRemovalView(style: .shatter, glyph: .fist, width: 393 * 0.65,
                         reduceMotion: false, onFinished: {})
     }
 }

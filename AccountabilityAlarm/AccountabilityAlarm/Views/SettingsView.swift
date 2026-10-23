@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage(Constants.bumpHapticKey) private var haptic = BumpHaptic.defaultValue.rawValue
+    @AppStorage(Constants.bumpGlyphKey) private var glyph = "random"
     @AppStorage(Constants.bumpRemovalKey) private var removal = "random"
     @AppStorage(Constants.bumpConfettiPatternKey) private var pattern = "random"
     @AppStorage(Constants.bumpConfettiShapesKey) private var shapes = "random"
@@ -27,6 +28,9 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    section("HAND") {
+                        pickerRows(selection: $glyph, items: BumpGlyph.allCases.map { ($0.rawValue, $0.label) })
+                    }
                     section("REMOVAL ANIMATION") {
                         pickerRows(selection: $removal, items: FistRemoval.allCases.map { ($0.rawValue, $0.label) })
                     }
@@ -36,7 +40,7 @@ struct SettingsView: View {
                     section("CONFETTI SHAPES") {
                         pickerRows(selection: $shapes, items: ConfettiShapes.allCases.map { ($0.rawValue, $0.label) })
                     }
-                    section("FIST SIZE") {
+                    section("HAND SIZE") {
                         HStack(spacing: 12) {
                             Slider(value: $fistWidth, in: 0.50...0.75, step: 0.05)
                                 .tint(L.Palette.fg)
@@ -81,7 +85,8 @@ struct SettingsView: View {
 
     private func tryIt() {
         var r = BumpRandomizer()
-        demoChoice = r.choose(removalOverride: FistRemoval(rawValue: removal),
+        demoChoice = r.choose(glyphOverride: BumpGlyph(rawValue: glyph),
+                              removalOverride: FistRemoval(rawValue: removal),
                               patternOverride: ConfettiPattern(rawValue: pattern),
                               shapesOverride: ConfettiShapes(rawValue: shapes),
                               lastRemoval: FistRemoval(rawValue: lastRemovalRaw))
