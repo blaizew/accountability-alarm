@@ -11,7 +11,6 @@ struct ConversationView: View {
 
     @State private var vm = ConversationViewModel()
     @State private var speech = SpeechRecognitionService()
-    @State private var tts = TextToSpeechService()
     // AlarmKit owns the ringing now — system UI plays alarm sound at full
     // volume when the alarm fires, then dismisses when the user taps
     // "Talk to Coach." The in-app conversation is intentionally silent;
@@ -100,7 +99,6 @@ struct ConversationView: View {
         }
         .onDisappear {
             timerTask?.cancel()
-            tts.stop()
             // Unconditional teardown — stopListening() no-ops while a prior
             // stop is finalizing, which left the record audio session live
             // after the view was gone.
@@ -120,14 +118,6 @@ struct ConversationView: View {
                                   patternOverride: ConfettiPattern(rawValue: bumpPattern),
                                   shapesOverride: ConfettiShapes(rawValue: bumpShapes),
                                   lastRemoval: FistRemoval(rawValue: lastRemovalRaw))
-        }
-        .onChange(of: vm.messages.count) { _, count in
-            // count > seededMessageCount: never re-speak a message restored
-            // from an earlier conversation in this chain.
-            if count > vm.seededMessageCount,
-               let last = vm.messages.last, last.role == .assistant, mode == .voice {
-                tts.speak(last.content)
-            }
         }
         .onChange(of: speech.isListening) { wasListening, isListening in
             // Recognizer died mid-listen (error or the OS duration limit)
@@ -152,12 +142,6 @@ struct ConversationView: View {
                 dismiss()
             }
         }
-        .onChange(of: tts.isSpeaking) { _, isSpeaking in
-            // When TTS finishes, re-prepare the recording session so the
-            // next mic tap is hot. TTS's stop() deactivates the session;
-            // without re-priming, the first tap eats activation latency.
-            if !isSpeaking { speech.prepare() }
-        }
     }
 
     // MARK: - Top bar
@@ -172,7 +156,6 @@ struct ConversationView: View {
             Spacer()
             if isRehearsal {
                 Button {
-                    tts.stop()
                     speech.cancelListening()
                     appState.dismissAlarm()
                     dismiss()
@@ -441,7 +424,6 @@ struct ConversationView: View {
                 }
             }
         } else {
-            tts.stop()
             speech.startListening()
         }
     }

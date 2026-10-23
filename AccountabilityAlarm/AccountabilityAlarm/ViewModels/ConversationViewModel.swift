@@ -32,8 +32,8 @@ final class ConversationViewModel {
     var snoozeButtonMinutes = 3
 
     /// How many of `messages` were restored from the chain's earlier
-    /// conversations (vs. produced in this session). The view uses this to
-    /// avoid re-speaking a restored assistant message via TTS on open.
+    /// conversations (vs. produced in this session). Used to count the
+    /// turns made in this session for the turn limit.
     private(set) var seededMessageCount = 0
 
     /// Set when the session completes without a user tap (LLM-driven
