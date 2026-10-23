@@ -20,6 +20,7 @@ struct ConversationView: View {
     @State private var elapsedSeconds: Int = 0
     @State private var timerTask: Task<Void, Never>?
     @State private var rehearsalAlarmSnapshot: Alarm?
+    @State private var pulse = false
 
     @State private var bumpChoice: BumpChoice?
     @AppStorage(Constants.bumpHapticKey) private var hapticRaw = BumpHaptic.defaultValue.rawValue
@@ -56,21 +57,25 @@ struct ConversationView: View {
         ZStack {
             L.Palette.bg.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                topBar
-                if let alarm { alarmHeader(alarm) }
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    topBar
+                    if let alarm { alarmHeader(alarm) }
 
-                if showStage, let choice = bumpChoice {
-                    bumpStage(choice)
-                        .transition(.opacity)
-                } else {
-                    messagesScroll
-                        .transition(.opacity)
-                    bottomPanel
-                        .transition(.opacity)
+                    if showStage, let choice = bumpChoice {
+                        bumpStage(choice)
+                            .transition(.opacity)
+                    } else {
+                        messagesScroll(containerHeight: geo.size.height)
+                            .transition(.opacity)
+                        bottomPanel
+                            .transition(.opacity)
+                    }
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .animation(.easeInOut(duration: 0.3), value: showStage)
+                .animation(.easeInOut(duration: 0.2), value: mode)
             }
-            .animation(.easeInOut(duration: 0.3), value: showStage)
         }
         .foregroundStyle(L.Palette.fg)
         .preferredColorScheme(.dark)
@@ -94,6 +99,7 @@ struct ConversationView: View {
                 // without the ~150ms activation delay that would otherwise
                 // truncate the start of speech.
                 speech.prepare()
+                HapticService.shared.prepare()
             }
             startTimers()
         }
@@ -198,7 +204,19 @@ struct ConversationView: View {
 
     // MARK: - Messages
 
-    private var messagesScroll: some View {
+    @ViewBuilder
+    private func messagesScroll(containerHeight: CGFloat) -> some View {
+        if mode == .voice {
+            messagesScrollContent
+                .frame(maxWidth: .infinity)
+                .frame(height: containerHeight * 0.5)
+        } else {
+            messagesScrollContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var messagesScrollContent: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -225,7 +243,6 @@ struct ConversationView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Bottom panel
@@ -233,9 +250,16 @@ struct ConversationView: View {
     private var bottomPanel: some View {
         VStack(spacing: 0) {
             modeTabs
-            if mode == .voice { voiceInput } else { textInput }
+            if mode == .voice {
+                voiceInput
+            } else {
+                textInput
+            }
             outcomeButtons
         }
+        // Voice fills the space under the half-height chat; text stays natural
+        // height so the chat keeps the room.
+        .frame(maxWidth: .infinity, maxHeight: mode == .voice ? .infinity : nil)
         .background(L.Palette.bg2)
         .overlay(alignment: .top) { L.Palette.hair2.frame(height: 1) }
     }
@@ -318,54 +342,63 @@ struct ConversationView: View {
     }
 
     private var voiceInput: some View {
-        HStack(spacing: 16) {
-            Button {
-                voiceMicTap()
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(vm.isCompleted
-                              ? L.Palette.bg3
-                              : (speech.isListening ? L.Palette.badRed : L.Palette.fg))
-                        .opacity(vm.isCompleted ? 0.5 : 1.0)
-                    L.Mic(size: 22, color: L.Palette.bg)
-                }
-                .frame(width: 56, height: 56)
-                .animation(.easeInOut(duration: 0.15), value: speech.isListening)
-            }
-            .buttonStyle(.plain)
-            .disabled(vm.isCompleted)
+        VStack(spacing: 18) {
+            Spacer(minLength: 0)
+            micButton
+            hintLabel
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, L.Space.pageH)
+    }
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 2) {
-                    ForEach(0..<28, id: \.self) { i in
-                        let seed = abs(sin(Double(i) * 2.1))
-                        Rectangle()
-                            .fill(L.Palette.fg)
-                            .opacity(vm.isCompleted ? 0.15 : 0.25 + seed * 0.6)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 3 + CGFloat(seed) * 18)
-                    }
-                }
-                .frame(height: 24)
-
+    private var micButton: some View {
+        Button {
+            voiceMicTap()
+        } label: {
+            ZStack {
                 if speech.isListening {
-                    Text("listening · tap to send")
-                        .font(L.Mono.font(10))
-                        .tracking(0.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(L.Palette.fg)
-                } else {
-                    Text(vm.isCompleted ? "conversation closed" : "tap mic to speak")
-                        .font(L.Mono.font(10))
-                        .tracking(0.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(L.Palette.dim)
+                    Circle()
+                        .stroke(L.Palette.badRed, lineWidth: 2)
+                        .scaleEffect(pulse ? 1.35 : 1.0)
+                        .opacity(pulse ? 0 : 0.7)
+                        .animation(pulse ? .easeOut(duration: 1.1).repeatForever(autoreverses: false) : .default,
+                                   value: pulse)
                 }
+                Circle()
+                    .fill(vm.isCompleted
+                          ? L.Palette.bg3
+                          : (speech.isListening ? L.Palette.badRed : L.Palette.fg))
+                    .opacity(vm.isCompleted ? 0.5 : 1.0)
+                    .animation(.easeInOut(duration: 0.15), value: speech.isListening)
+                L.Mic(size: 48, color: L.Palette.bg)
+            }
+            .frame(width: 128, height: 128)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(vm.isCompleted)
+        .accessibilityLabel(speech.isListening ? "Stop and send" : "Speak")
+        .onChange(of: speech.isListening) { _, isListening in
+            pulse = isListening
+        }
+    }
+
+    private var hintLabel: some View {
+        Group {
+            if speech.isListening {
+                Text("listening · tap to send")
+                    .foregroundStyle(L.Palette.badRed)
+            } else {
+                Text(vm.isCompleted ? "conversation closed" : "tap mic to speak")
+                    .foregroundStyle(L.Palette.dim)
             }
         }
-        .padding(.horizontal, L.Space.pageH)
-        .padding(.vertical, 18)
+        .font(L.Mono.font(10))
+        .tracking(0.4)
+        .textCase(.uppercase)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
     }
 
     private var textInput: some View {
@@ -415,6 +448,7 @@ struct ConversationView: View {
     }
 
     private func voiceMicTap() {
+        HapticService.shared.play(speech.isListening ? .thudClick : .click)
         if speech.isListening {
             Task { @MainActor in
                 let transcript = await speech.finishListening()
