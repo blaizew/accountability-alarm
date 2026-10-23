@@ -92,13 +92,14 @@ struct BumpStageView: View {
             if !isDemo {
                 Button(action: snooze) {
                     Text(snoozeLabel)
-                        .font(L.Mono.font(10.5))
-                        .tracking(0.6)
+                        .font(L.Mono.font(14, weight: .semibold))
+                        .tracking(0.8)
                         .textCase(.uppercase)
-                        .foregroundStyle(L.Palette.muted)
+                        .foregroundStyle(L.Palette.badRed)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .overlay(Rectangle().stroke(L.Palette.hair2, lineWidth: 1))
+                        .padding(.vertical, 18)
+                        .background(L.Palette.badRed.opacity(0.12))
+                        .overlay(Rectangle().stroke(L.Palette.badRed, lineWidth: 1.5))
                 }
                 .buttonStyle(.plain)
                 .disabled(resolved)

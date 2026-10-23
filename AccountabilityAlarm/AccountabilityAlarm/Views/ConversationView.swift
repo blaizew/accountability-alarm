@@ -296,13 +296,14 @@ struct ConversationView: View {
                 dismiss()
             } label: {
                 Text("Snooze \(vm.snoozeButtonMinutes)m")
-                    .font(L.Mono.font(10.5))
-                    .tracking(0.6)
+                    .font(L.Mono.font(14, weight: .semibold))
+                    .tracking(0.8)
                     .textCase(.uppercase)
-                    .foregroundStyle(vm.isCompleted ? L.Palette.dim : L.Palette.muted)
+                    .foregroundStyle(vm.isCompleted ? L.Palette.dim : L.Palette.badRed)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .overlay(Rectangle().stroke(L.Palette.hair2, lineWidth: 1))
+                    .padding(.vertical, 18)
+                    .background(vm.isCompleted ? Color.clear : L.Palette.badRed.opacity(0.12))
+                    .overlay(Rectangle().stroke(vm.isCompleted ? L.Palette.hair2 : L.Palette.badRed, lineWidth: 1.5))
             }
             .buttonStyle(.plain)
             // A resolved chain must not be re-armed from the still-open view.
